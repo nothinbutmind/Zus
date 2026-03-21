@@ -28,7 +28,7 @@ function TypewriterSub() {
     );
   };
   return (
-    <p style={{ fontFamily: "'Share Tech Mono',monospace", fontSize: 11, color: "#3a6660", maxWidth: 400, margin: "24px auto 36px", lineHeight: 1.9, animation: "fadeUp .9s .6s both", minHeight: 80 }}>
+    <p className="typewriter-sub" style={{ fontFamily: "'Share Tech Mono',monospace", fontSize: 11, color: "#3a6660", maxWidth: 400, margin: "24px auto 36px", lineHeight: 1.9, animation: "fadeUp .9s .6s both", minHeight: 80 }}>
       {highlight(text)}
       {!done && <span style={{ animation: "cur 0.7s steps(1) infinite", color: "#00ffc8" }}>▋</span>}
     </p>
@@ -138,7 +138,7 @@ function Glitch({ children, color }) {
 }
 
 /* ── Neon button ── */
-function Btn({ children, outline }) {
+function Btn({ children, outline, className = "" }) {
   const [hov, setHov] = useState(false);
   const base = {
     fontFamily: "'Share Tech Mono', monospace",
@@ -153,7 +153,7 @@ function Btn({ children, outline }) {
     display: "inline-block",
   };
   if (outline) return (
-    <button onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)} style={{
+    <button className={className} onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)} style={{
       ...base,
       background: "transparent",
       color: hov ? "#00ffc8" : "#4a7a72",
@@ -162,7 +162,7 @@ function Btn({ children, outline }) {
     }}>{children}</button>
   );
   return (
-    <button onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)} style={{
+    <button className={className} onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)} style={{
       ...base,
       background: hov ? "#00ffc8" : "#00ddb0",
       color: "#020d0f",
@@ -208,7 +208,7 @@ function FeatCard({ tag, title, desc, extra, delay }) {
 function HowStep({ dot, title, desc, delay }) {
   const [ref, vis] = useReveal();
   return (
-    <div ref={ref} style={{
+    <div className="how-step" ref={ref} style={{
       display: "flex", gap: 16, alignItems: "flex-start",
       padding: "20px 24px",
       border: "1px solid rgba(0,255,200,.07)",
@@ -280,10 +280,123 @@ export default function App() {
           50%     { text-shadow: 0 0 48px rgba(0,255,200,.85),0 0 90px rgba(0,255,200,.4),0 0 130px rgba(0,255,200,.1); }
         }
         button { outline: none; }
+        @media (max-width: 900px) {
+          .top-nav {
+            padding: 14px 20px !important;
+          }
+          .nav-actions {
+            gap: 16px !important;
+          }
+          .nav-cta {
+            padding: 10px 16px !important;
+          }
+          .content-section,
+          .use-cases-section {
+            padding: 72px 24px !important;
+          }
+          .site-footer {
+            padding: 20px 24px !important;
+          }
+        }
+        @media (max-width: 680px) {
+          .top-nav {
+            flex-direction: column !important;
+            align-items: flex-start !important;
+            gap: 14px !important;
+            padding: 14px 16px !important;
+          }
+          .nav-brand {
+            font-size: 11px !important;
+            letter-spacing: 2px !important;
+          }
+          .nav-actions {
+            width: 100% !important;
+            justify-content: space-between !important;
+            gap: 10px !important;
+            flex-wrap: wrap !important;
+          }
+          .nav-link {
+            font-size: 8px !important;
+            letter-spacing: 1.5px !important;
+          }
+          .nav-cta,
+          .hero-btn {
+            width: 100% !important;
+            justify-content: center !important;
+            text-align: center !important;
+          }
+          .hero-section {
+            min-height: auto !important;
+            padding: 164px 16px 72px !important;
+          }
+          .hero-content {
+            width: 100% !important;
+            max-width: 520px !important;
+          }
+          .hero-eyebrow {
+            width: 100% !important;
+            max-width: 320px !important;
+            font-size: 8px !important;
+            letter-spacing: 2px !important;
+            padding: 6px 10px !important;
+          }
+          .hero-title {
+            font-size: clamp(36px, 17vw, 62px) !important;
+            letter-spacing: 1px !important;
+            line-height: 1.02 !important;
+          }
+          .typewriter-sub {
+            max-width: none !important;
+            width: 100% !important;
+            min-height: 96px !important;
+            font-size: 10px !important;
+            margin: 20px auto 28px !important;
+            line-height: 1.85 !important;
+          }
+          .hero-actions {
+            flex-direction: column !important;
+            gap: 10px !important;
+            align-items: stretch !important;
+          }
+          .content-section,
+          .use-cases-section,
+          .ledger-section {
+            padding-left: 16px !important;
+            padding-right: 16px !important;
+          }
+          .feature-grid,
+          .use-cases-grid {
+            grid-template-columns: 1fr !important;
+          }
+          .how-step {
+            flex-direction: column !important;
+            gap: 12px !important;
+            padding: 18px !important;
+          }
+          .ledger-copy {
+            line-height: 1.85 !important;
+          }
+          .desktop-break {
+            display: none !important;
+          }
+          .site-footer {
+            flex-direction: column !important;
+            gap: 16px !important;
+            text-align: center !important;
+            padding: 20px 16px 28px !important;
+          }
+          .footer-brand {
+            justify-content: center !important;
+          }
+          .footer-copy,
+          .footer-links {
+            text-align: center !important;
+          }
+        }
       `}</style>
 
       {/* NAV */}
-      <nav style={{
+      <nav className="top-nav" style={{
         position: "fixed", top: 0, left: 0, right: 0, zIndex: 100,
         display: "flex", alignItems: "center", justifyContent: "space-between",
         padding: "14px 40px",
@@ -292,21 +405,21 @@ export default function App() {
         borderBottom: scrolled ? "1px solid rgba(0,255,200,.08)" : "1px solid transparent",
         transition: "all .4s",
       }}>
-        <span style={{ fontFamily: "'Share Tech Mono',monospace", fontSize: 12, color: "#00ffc8", letterSpacing: 3, textShadow: "0 0 14px rgba(0,255,200,.5)" }}>
+        <span className="nav-brand" style={{ fontFamily: "'Share Tech Mono',monospace", fontSize: 12, color: "#00ffc8", letterSpacing: 3, textShadow: "0 0 14px rgba(0,255,200,.5)" }}>
           ZUS_PROTOCOL
         </span>
-        <div style={{ display: "flex", gap: 32, alignItems: "center" }}>
+        <div className="nav-actions" style={{ display: "flex", gap: 32, alignItems: "center" }}>
           {["PRINCIPLES","FEATURES"].map(t => (
-            <a key={t} href="#" style={{ fontFamily: "'Share Tech Mono',monospace", fontSize: 9, color: "#3a6660", letterSpacing: 2, textDecoration: "none", transition: "color .2s" }}
+            <a className="nav-link" key={t} href="#" style={{ fontFamily: "'Share Tech Mono',monospace", fontSize: 9, color: "#3a6660", letterSpacing: 2, textDecoration: "none", transition: "color .2s" }}
               onMouseEnter={e => e.target.style.color = "#00ffc8"}
               onMouseLeave={e => e.target.style.color = "#3a6660"}>{t}</a>
           ))}
-          <Btn>LAUNCH APP</Btn>
+          <Btn className="nav-cta">LAUNCH APP</Btn>
         </div>
       </nav>
 
       {/* HERO */}
-      <section style={{ position: "relative", minHeight: "100vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", textAlign: "center", padding: "120px 24px 80px", overflow: "hidden" }}>
+      <section className="hero-section" style={{ position: "relative", minHeight: "100vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", textAlign: "center", padding: "120px 24px 80px", overflow: "hidden" }}>
         <div style={{ position: "absolute", inset: 0, zIndex: 0,
           background: "radial-gradient(ellipse 65% 45% at 50% 35%, rgba(0,255,200,.055) 0%, transparent 70%), radial-gradient(ellipse 35% 25% at 15% 85%, rgba(0,180,140,.03) 0%, transparent 60%), radial-gradient(ellipse 35% 25% at 85% 70%, rgba(0,100,80,.03) 0%, transparent 60%)" }} />
         <div style={{ position: "absolute", inset: 0, zIndex: 0,
@@ -315,12 +428,12 @@ export default function App() {
           maskImage: "radial-gradient(ellipse at center, black 25%, transparent 75%)" }} />
         <Particles />
 
-        <div style={{ position: "relative", zIndex: 2 }}>
-          <div style={{ fontFamily: "'Share Tech Mono',monospace", fontSize: 9, letterSpacing: 3, color: "#00ddb0", border: "1px solid rgba(0,255,200,.22)", display: "inline-block", padding: "4px 14px", marginBottom: 28, animation: "fadeUp .8s .2s both" }}>
+        <div className="hero-content" style={{ position: "relative", zIndex: 2 }}>
+          <div className="hero-eyebrow" style={{ fontFamily: "'Share Tech Mono',monospace", fontSize: 9, letterSpacing: 3, color: "#00ddb0", border: "1px solid rgba(0,255,200,.22)", display: "inline-block", padding: "4px 14px", marginBottom: 28, animation: "fadeUp .8s .2s both" }}>
             PRIVACY-PRESERVING PROTOCOL
           </div>
 
-          <h1 style={{ fontFamily: "'Share Tech Mono',monospace", fontSize: "clamp(46px,8vw,104px)", fontWeight: 400, lineHeight: .96, letterSpacing: 2, animation: "fadeUp .9s .4s both" }}>
+          <h1 className="hero-title" style={{ fontFamily: "'Share Tech Mono',monospace", fontSize: "clamp(46px,8vw,104px)", fontWeight: 400, lineHeight: .96, letterSpacing: 2, animation: "fadeUp .9s .4s both" }}>
             <Glitch color="#ffffff">REWARDS_</Glitch><br />
             <span style={{ color: "#ffffff" }}>WITHOUT</span><br />
             <span style={{ color: "#00ffc8", display: "inline-block", animation: "glowPulse 3s 1.4s ease-in-out infinite" }}>
@@ -330,21 +443,21 @@ export default function App() {
 
           <TypewriterSub />
 
-          <div style={{ display: "flex", gap: 14, justifyContent: "center", flexWrap: "wrap", animation: "fadeUp .9s .8s both" }}>
-            <Btn>BOOK DEMO</Btn>
-            <Btn outline>LAUNCH CAMPAIGN</Btn>
+          <div className="hero-actions" style={{ display: "flex", gap: 14, justifyContent: "center", flexWrap: "wrap", animation: "fadeUp .9s .8s both" }}>
+            <Btn className="hero-btn">BOOK DEMO</Btn>
+            <Btn className="hero-btn" outline>LAUNCH CAMPAIGN</Btn>
           </div>
         </div>
       </section>
 
       {/* ENCRYPTED BY DESIGN */}
-      <section style={{ padding: "90px 48px", maxWidth: 1100, margin: "0 auto" }}>
+      <section className="content-section" style={{ padding: "90px 48px", maxWidth: 1100, margin: "0 auto" }}>
         <div style={{ fontFamily: "'Share Tech Mono',monospace", fontSize: 9, color: "#2a5550", letterSpacing: 2, marginBottom: 10 }}>ZRC_LAYER_LINE: 001</div>
         <h2 style={{ fontFamily: "'Share Tech Mono',monospace", fontSize: "clamp(20px,3.5vw,40px)", color: "#cce8e4", letterSpacing: 3, marginBottom: 8 }}>ENCRYPTED BY DESIGN.</h2>
         <p style={{ fontFamily: "'Share Tech Mono',monospace", fontSize: 9, color: "#3a6660", marginBottom: 40, lineHeight: 1.8 }}>
           Powered by ZK Proofs and Private Transactions, providing trust without public transparency.
         </p>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(260px,1fr))", gap: 16 }}>
+        <div className="feature-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(260px,1fr))", gap: 16 }}>
           <FeatCard tag="// CONFIDENTIAL_AIRDROP" title="DROP TO THE RIGHT WALLETS. TELL NO ONE ELSE." desc="Distribute tokens to verified holders without exposing the recipient list or individual balances." extra="+ MORE     ONLINE REWARDS >" delay={0} />
           <FeatCard tag="// NATURAL_LANGUAGE_REWARDS" title="SET RULES IN PLAIN PROMPTS." desc="Define eligibility criteria using natural language — no smart contract expertise or coding required for deployment." delay={120} />
           <FeatCard tag="// STEALTH_ADDRESSES" title="ONE-TIME ADDRESSES. ZERO TRACEABILITY." desc="Generate ephemeral stealth addresses using ZK tech so recipients can't be linked across transactions." extra="MAX SEND: 2D     AVAILABLE" delay={240} />
@@ -352,7 +465,7 @@ export default function App() {
       </section>
 
       {/* HOW ZUS WORKS */}
-      <section style={{ padding: "90px 48px", maxWidth: 1100, margin: "0 auto" }}>
+      <section className="content-section" style={{ padding: "90px 48px", maxWidth: 1100, margin: "0 auto" }}>
         <div style={{ fontFamily: "'Share Tech Mono',monospace", fontSize: 9, color: "#2a5550", letterSpacing: 2, marginBottom: 10 }}>ZRC_LAYER_LINE: 002</div>
         <h2 style={{ fontFamily: "'Share Tech Mono',monospace", fontSize: "clamp(20px,3.5vw,40px)", color: "#cce8e4", letterSpacing: 3, marginBottom: 4 }}>
           HOW <span style={{ color: "#00ffc8", textShadow: "0 0 16px rgba(0,255,200,.4)" }}>ZUS</span> WORKS
@@ -366,14 +479,14 @@ export default function App() {
       </section>
 
       {/* OPERATIONAL USE CASES */}
-      <section style={{ padding: "90px 48px", textAlign: "center", position: "relative", overflow: "hidden" }}>
+      <section className="content-section use-cases-section" style={{ padding: "90px 48px", textAlign: "center", position: "relative", overflow: "hidden" }}>
         <div style={{ position: "absolute", inset: 0, background: "radial-gradient(ellipse 70% 60% at 50% 50%, rgba(0,255,200,.02) 0%, transparent 70%)", pointerEvents: "none" }} />
         <div style={{ maxWidth: 1100, margin: "0 auto", position: "relative", zIndex: 1 }}>
           <div style={{ fontFamily: "'Share Tech Mono',monospace", fontSize: 9, color: "#2a5550", letterSpacing: 2, marginBottom: 10 }}>ZRC_LAYER_LINE: 003</div>
           <h2 style={{ fontFamily: "'Share Tech Mono',monospace", fontSize: "clamp(20px,3.5vw,40px)", color: "#cce8e4", letterSpacing: 4, marginBottom: 48 }}>
             OPERATIONAL USE CASES
           </h2>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, maxWidth: 700, margin: "0 auto" }}>
+          <div className="use-cases-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, maxWidth: 700, margin: "0 auto" }}>
             <UseCard title="VIP DISCOUNTS" desc="Offer exclusive price reductions to your top-tier customers without revealing their transaction history." delay={0} />
             <UseCard title="CASHBACK CAMPAIGNS" desc="Automate reward rebates for verified purchases while maintaining absolute wallet confidentiality." delay={100} />
             <UseCard title="TOKEN-HOLDER PERKS" desc="Unlock ecosystem benefits for asset holders without exposing their total portfolio balances." delay={200} />
@@ -383,38 +496,38 @@ export default function App() {
       </section>
 
       {/* LEDGER OF SHADOWS */}
-      <section style={{ padding: "120px 24px", textAlign: "center", position: "relative", overflow: "hidden" }}>
+      <section className="ledger-section" style={{ padding: "120px 24px", textAlign: "center", position: "relative", overflow: "hidden" }}>
         <div style={{ position: "absolute", inset: 0, background: "radial-gradient(ellipse 55% 40% at 50% 50%, rgba(0,255,200,.035) 0%, transparent 70%)", pointerEvents: "none" }} />
         <div style={{ maxWidth: 600, margin: "0 auto", position: "relative", zIndex: 1 }}>
           <div style={{ fontFamily: "'Share Tech Mono',monospace", fontSize: 9, color: "#2a5550", letterSpacing: 2, marginBottom: 16 }}>ZRC_LAYER_LINE: 004</div>
           <h2 style={{ fontFamily: "'Share Tech Mono',monospace", fontSize: "clamp(30px,6vw,68px)", color: "#cce8e4", letterSpacing: 3, lineHeight: 1.05, marginBottom: 20 }}>
             THE LEDGER OF<br />SHADOWS.
           </h2>
-          <p style={{ fontFamily: "'Share Tech Mono',monospace", fontSize: 9, color: "#3a6660", lineHeight: 2, marginBottom: 36 }}>
-            Start distributing rewards that respect the right to<br />
-            privacy. Join the next generation of protocol-level<br />
+          <p className="ledger-copy" style={{ fontFamily: "'Share Tech Mono',monospace", fontSize: 9, color: "#3a6660", lineHeight: 2, marginBottom: 36 }}>
+            Start distributing rewards that respect the right to<br className="desktop-break" />
+            privacy. Join the next generation of protocol-level<br className="desktop-break" />
             confidentiality.
           </p>
-          <Btn outline>CREATE CAMPAIGN</Btn>
+          <Btn className="hero-btn" outline>CREATE CAMPAIGN</Btn>
         </div>
       </section>
 
       {/* FOOTER */}
-      <footer style={{
+      <footer className="site-footer" style={{
         borderTop: "1px solid rgba(0,255,200,.06)",
         padding: "20px 40px",
         display: "flex", justifyContent: "space-between", alignItems: "center",
         fontFamily: "'Share Tech Mono',monospace", fontSize: 9, color: "#2a5550", letterSpacing: 1,
       }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div className="footer-brand" style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <span style={{ color: "#00ffc8" }}>ZUS_PROTOCOL_CORE</span>
           <PixelCat />
         </div>
-        <div style={{ textAlign: "center", lineHeight: 2 }}>
+        <div className="footer-copy" style={{ textAlign: "center", lineHeight: 2 }}>
           <div>© 2025 ZUS PROTOCOL. ALL RIGHTS RESERVED.</div>
           <div style={{ color: "#1a5550", fontSize: 8, letterSpacing: 2 }}>i like cats</div>
         </div>
-        <span>PRIVACY · TERMS · DOCS</span>
+        <span className="footer-links">PRIVACY · TERMS · DOCS</span>
       </footer>
     </>
   );
