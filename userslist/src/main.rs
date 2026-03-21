@@ -1,29 +1,37 @@
-use rs_merkle::{MerkleTree, algorithms::Sha256};
-use rs_merkle::Hasher;
+mod error;
+mod merkle;
+mod r#type;
 
+use crate::merkle::{AppState, create_tree, get_tree, get_tree_proof, health, list_creator_trees};
+use axum::{
+    Router,
+    routing::{get, post},
+};
+use std::{env, net::SocketAddr, sync::Arc};
 
-fn main() {
-    let addys = ["0x","1x","2x","3x" , "4x"];
-    //println!("{:?}", addys[0].as_bytes());
-    let leaves:Vec<[u8;32]> = addys.iter().map(|x| Sha256::hash(x.as_bytes())).collect();
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let state = Arc::new(AppState::default());
+    let app = Router::new()
+        .route("/health", get(health))
+        .route("/trees", post(create_tree))
+        .route("/trees/:tree_id", get(get_tree))
+        .route("/trees/:tree_id/proof/:leaf_address", get(get_tree_proof))
+        .route(
+            "/campaign-creators/:campaign_creator_address/trees",
+            get(list_creator_trees),
+        )
+        .with_state(state);
 
-    let merkle_tree = MerkleTree::<Sha256>::from_leaves(&leaves);
-    //println!("{:?}", merkle_tree.root());
-    match merkle_tree.root(){
-        Some(root) =>{
-            let hex = root 
-            .iter()
-            .map(|x| format!("{:02x}", x))
-            .collect::<String>();
-            println!("root hex {}" , hex);
-    }
-    None => {
-        println!("Fuck u");
-    }
+    let port = env::var("PORT")
+        .ok()
+        .and_then(|value| value.parse::<u16>().ok())
+        .unwrap_or(3000);
+    let address = SocketAddr::from(([127, 0, 0, 1], port));
+    let listener = tokio::net::TcpListener::bind(address).await?;
 
-    }
-}
+    println!("Merkle proof API listening on http://{}", address);
+    axum::serve(listener, app).await?;
 
-fn belongsTo(root: String) -> {
-    
+    Ok(())
 }
