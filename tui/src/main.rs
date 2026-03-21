@@ -1,11 +1,10 @@
-use std::{
-    env,
-    io::{self, Stdout},
-    process::Command,
-    time::Duration,
-};
+mod error;
+mod types;
 
-use anyhow::{Context, Result, bail};
+use std::{env, io, process::Command, time::Duration};
+
+use crate::error::{AppError, AppResult};
+use crate::types::{ActionForm, ActionKind, App, AppTerminal, CommandResult, Focus};
 use crossterm::{
     event::{self, Event, KeyCode, KeyEventKind},
     execute,
@@ -41,239 +40,7 @@ const SMALL_LOGO: &[&str] = &[
 const HELP_TEXT: &str =
     "Up/Down: move  Tab/Left/Right: focus  Type: edit  Enter: run  Esc: clear output  q: quit";
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Focus {
-    Actions,
-    Fields,
-}
-
-#[derive(Clone, Copy, Debug)]
-enum ActionKind {
-    CheckAddress,
-    CreateWallet,
-    ImportWallet,
-}
-
-#[derive(Clone, Debug)]
-struct FormField {
-    key: &'static str,
-    label: &'static str,
-    hint: &'static str,
-    value: String,
-    sensitive: bool,
-    required: bool,
-}
-
-#[derive(Clone, Debug)]
-struct ActionForm {
-    kind: ActionKind,
-    label: &'static str,
-    command_label: &'static str,
-    description: &'static str,
-    fields: Vec<FormField>,
-}
-
-struct App {
-    forms: Vec<ActionForm>,
-    selected_action: usize,
-    selected_field: usize,
-    focus: Focus,
-    output: String,
-    last_command: String,
-    status: String,
-}
-
-struct CommandResult {
-    command_preview: String,
-    output: String,
-    success: bool,
-}
-
-type AppTerminal = Terminal<CrosstermBackend<Stdout>>;
-
 impl App {
-    fn new() -> Self {
-        Self {
-            forms: vec![
-                ActionForm {
-                    kind: ActionKind::CheckAddress,
-                    label: "Check Address",
-                    command_label: "cast wallet address",
-                    description: "Paste a private key and derive the wallet address with Foundry.",
-                    fields: vec![FormField {
-                        key: "private_key",
-                        label: "Private Key",
-                        hint: "paste your private key here",
-                        value: String::new(),
-                        sensitive: true,
-                        required: true,
-                    }],
-                },
-                ActionForm {
-                    kind: ActionKind::CreateWallet,
-                    label: "Create New",
-                    command_label: "cast wallet new",
-                    description: "Generate a new wallet. Add password plus account name to save it as a Foundry keystore.",
-                    fields: vec![
-                        FormField {
-                            key: "account_name",
-                            label: "Account Name",
-                            hint: "zus-main",
-                            value: String::new(),
-                            sensitive: false,
-                            required: false,
-                        },
-                        FormField {
-                            key: "keystore_dir",
-                            label: "Keystore Dir",
-                            hint: "~/.foundry/keystores",
-                            value: String::new(),
-                            sensitive: false,
-                            required: false,
-                        },
-                        FormField {
-                            key: "password",
-                            label: "Password",
-                            hint: "required if saving keystore",
-                            value: String::new(),
-                            sensitive: true,
-                            required: false,
-                        },
-                        FormField {
-                            key: "number",
-                            label: "Number",
-                            hint: "1",
-                            value: "1".to_string(),
-                            sensitive: false,
-                            required: false,
-                        },
-                    ],
-                },
-                ActionForm {
-                    kind: ActionKind::ImportWallet,
-                    label: "Import Private Key",
-                    command_label: "cast wallet import",
-                    description: "Store an existing private key as an encrypted Foundry keystore entry.",
-                    fields: vec![
-                        FormField {
-                            key: "account_name",
-                            label: "Account Name",
-                            hint: "my-imported-wallet",
-                            value: String::new(),
-                            sensitive: false,
-                            required: true,
-                        },
-                        FormField {
-                            key: "private_key",
-                            label: "Private Key",
-                            hint: "paste your private key here",
-                            value: String::new(),
-                            sensitive: true,
-                            required: true,
-                        },
-                        FormField {
-                            key: "password",
-                            label: "Password",
-                            hint: "keystore password",
-                            value: String::new(),
-                            sensitive: true,
-                            required: true,
-                        },
-                        FormField {
-                            key: "keystore_dir",
-                            label: "Keystore Dir",
-                            hint: "~/.foundry/keystores",
-                            value: String::new(),
-                            sensitive: false,
-                            required: false,
-                        },
-                    ],
-                },
-            ],
-            selected_action: 0,
-            selected_field: 0,
-            focus: Focus::Actions,
-            output: "Yes, this is possible. Pick a flow on the left, fill the fields, then press Enter."
-                .to_string(),
-            last_command: "cast wallet address --private-key <PRIVATE_KEY>".to_string(),
-            status: "Ready".to_string(),
-        }
-    }
-
-    fn current_form(&self) -> &ActionForm {
-        &self.forms[self.selected_action]
-    }
-
-    fn current_form_mut(&mut self) -> &mut ActionForm {
-        &mut self.forms[self.selected_action]
-    }
-
-    fn current_field(&self) -> Option<&FormField> {
-        self.current_form().fields.get(self.selected_field)
-    }
-
-    fn current_field_mut(&mut self) -> Option<&mut FormField> {
-        let index = self.selected_field;
-        self.current_form_mut().fields.get_mut(index)
-    }
-
-    fn select_next_action(&mut self) {
-        self.selected_action = (self.selected_action + 1) % self.forms.len();
-        self.selected_field = 0;
-    }
-
-    fn select_prev_action(&mut self) {
-        self.selected_action = if self.selected_action == 0 {
-            self.forms.len() - 1
-        } else {
-            self.selected_action - 1
-        };
-        self.selected_field = 0;
-    }
-
-    fn select_next_field(&mut self) {
-        if self.current_form().fields.is_empty() {
-            return;
-        }
-        self.selected_field = (self.selected_field + 1) % self.current_form().fields.len();
-    }
-
-    fn select_prev_field(&mut self) {
-        if self.current_form().fields.is_empty() {
-            return;
-        }
-        self.selected_field = if self.selected_field == 0 {
-            self.current_form().fields.len() - 1
-        } else {
-            self.selected_field - 1
-        };
-    }
-
-    fn move_focus_left(&mut self) {
-        self.focus = Focus::Actions;
-    }
-
-    fn move_focus_right(&mut self) {
-        self.focus = Focus::Fields;
-    }
-
-    fn backspace(&mut self) {
-        if let Some(field) = self.current_field_mut() {
-            field.value.pop();
-        }
-    }
-
-    fn insert_char(&mut self, ch: char) {
-        if let Some(field) = self.current_field_mut() {
-            field.value.push(ch);
-        }
-    }
-
-    fn clear_output(&mut self) {
-        self.output.clear();
-        self.status = "Output cleared".to_string();
-    }
-
     fn run(&mut self) {
         match build_command(self.current_form()) {
             Ok(args) => match run_cast_command(&args) {
@@ -288,61 +55,60 @@ impl App {
                 }
                 Err(err) => {
                     self.last_command = format!("cast {}", args.join(" "));
-                    self.output = format!("{err:#}");
+                    self.output = err.to_string();
                     self.status = "Failed to launch cast".to_string();
                 }
             },
             Err(err) => {
-                self.output = format!("{err:#}");
+                self.output = err.to_string();
                 self.status = "Missing or invalid input".to_string();
             }
         }
     }
 }
 
-impl ActionForm {
-    fn value(&self, key: &str) -> &str {
-        self.fields
-            .iter()
-            .find(|field| field.key == key)
-            .map(|field| field.value.trim())
-            .unwrap_or("")
-    }
-}
-
-fn main() -> Result<()> {
+fn main() -> AppResult<()> {
     let mut terminal = setup_terminal()?;
     let app_result = run_app(&mut terminal);
     restore_terminal(&mut terminal)?;
     app_result
 }
 
-fn setup_terminal() -> Result<AppTerminal> {
-    enable_raw_mode().context("failed to enable raw mode")?;
-    execute!(io::stdout(), EnterAlternateScreen).context("failed to enter alternate screen")?;
+fn setup_terminal() -> AppResult<AppTerminal> {
+    enable_raw_mode().map_err(|source| AppError::io("failed to enable raw mode", source))?;
+    execute!(io::stdout(), EnterAlternateScreen)
+        .map_err(|source| AppError::io("failed to enter alternate screen", source))?;
     let backend = CrosstermBackend::new(io::stdout());
-    Terminal::new(backend).context("failed to initialize terminal")
+    Terminal::new(backend).map_err(|source| AppError::io("failed to initialize terminal", source))
 }
 
-fn restore_terminal(terminal: &mut AppTerminal) -> Result<()> {
-    disable_raw_mode().context("failed to disable raw mode")?;
+fn restore_terminal(terminal: &mut AppTerminal) -> AppResult<()> {
+    disable_raw_mode().map_err(|source| AppError::io("failed to disable raw mode", source))?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)
-        .context("failed to leave alternate screen")?;
-    terminal.show_cursor().context("failed to show cursor")?;
+        .map_err(|source| AppError::io("failed to leave alternate screen", source))?;
+    terminal
+        .show_cursor()
+        .map_err(|source| AppError::io("failed to show cursor", source))?;
     Ok(())
 }
 
-fn run_app(terminal: &mut AppTerminal) -> Result<()> {
+fn run_app(terminal: &mut AppTerminal) -> AppResult<()> {
     let mut app = App::new();
 
     loop {
-        terminal.draw(|frame| render(frame, &app))?;
+        terminal
+            .draw(|frame| render(frame, &app))
+            .map_err(|source| AppError::io("failed to draw terminal frame", source))?;
 
-        if !event::poll(Duration::from_millis(100))? {
+        if !event::poll(Duration::from_millis(100))
+            .map_err(|source| AppError::io("failed while polling terminal events", source))?
+        {
             continue;
         }
 
-        let Event::Key(key) = event::read()? else {
+        let Event::Key(key) = event::read()
+            .map_err(|source| AppError::io("failed to read terminal event", source))?
+        else {
             continue;
         };
 
@@ -397,7 +163,10 @@ fn render_hero(frame: &mut Frame, area: Rect, compact: bool) {
         .style(Style::default().fg(Color::Blue));
     let inner = hero_block.inner(area);
     frame.render_widget(hero_block, area);
-    frame.render_widget(Block::default().style(Style::default().bg(Color::Black)), inner);
+    frame.render_widget(
+        Block::default().style(Style::default().bg(Color::Black)),
+        inner,
+    );
 
     let logo_lines = if compact { SMALL_LOGO } else { LOGO };
     let logo = Paragraph::new(Text::from(
@@ -602,7 +371,9 @@ fn render_fields(frame: &mut Frame, area: Rect, app: &App) {
             };
             let cursor_x = area
                 .x
-                .saturating_add(field.label.len() as u16 + 5 + cursor_content.chars().count() as u16)
+                .saturating_add(
+                    field.label.len() as u16 + 5 + cursor_content.chars().count() as u16,
+                )
                 .min(area.right().saturating_sub(2));
             let cursor_y = area.y.saturating_add(1 + row);
             frame.set_cursor_position((cursor_x, cursor_y));
@@ -640,7 +411,7 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(footer, area);
 }
 
-fn build_command(form: &ActionForm) -> Result<Vec<String>> {
+fn build_command(form: &ActionForm) -> AppResult<Vec<String>> {
     match form.kind {
         ActionKind::CheckAddress => {
             let private_key = required_value(form, "private_key", "Private key is required.")?;
@@ -662,9 +433,9 @@ fn build_command(form: &ActionForm) -> Result<Vec<String>> {
             };
             let parsed_number: usize = number
                 .parse()
-                .with_context(|| "Number must be a positive integer.")?;
+                .map_err(|_| AppError::message("Number must be a positive integer."))?;
             if parsed_number == 0 {
-                bail!("Number must be at least 1.");
+                return Err(AppError::message("Number must be at least 1."));
             }
 
             let mut args = vec!["wallet".to_string(), "new".to_string()];
@@ -673,10 +444,13 @@ fn build_command(form: &ActionForm) -> Result<Vec<String>> {
                 args.push(parsed_number.to_string());
             }
 
-            let should_save = !account_name.is_empty() || !keystore_dir.is_empty() || !password.is_empty();
+            let should_save =
+                !account_name.is_empty() || !keystore_dir.is_empty() || !password.is_empty();
             if should_save {
                 if password.is_empty() {
-                    bail!("Password is required when saving a new wallet to a keystore.");
+                    return Err(AppError::message(
+                        "Password is required when saving a new wallet to a keystore.",
+                    ));
                 }
                 let target_dir = if keystore_dir.is_empty() {
                     default_foundry_keystore_dir()
@@ -714,19 +488,19 @@ fn build_command(form: &ActionForm) -> Result<Vec<String>> {
     }
 }
 
-fn required_value(form: &ActionForm, key: &str, message: &str) -> Result<String> {
+fn required_value(form: &ActionForm, key: &str, message: &str) -> AppResult<String> {
     let value = form.value(key);
     if value.is_empty() {
-        bail!(message.to_string());
+        return Err(AppError::message(message.to_string()));
     }
     Ok(value.to_string())
 }
 
-fn run_cast_command(args: &[String]) -> Result<CommandResult> {
+fn run_cast_command(args: &[String]) -> AppResult<CommandResult> {
     let output = Command::new("cast")
         .args(args)
         .output()
-        .with_context(|| format!("failed to execute `cast {}`", args.join(" ")))?;
+        .map_err(|source| AppError::command_launch(format!("cast {}", args.join(" ")), source))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
