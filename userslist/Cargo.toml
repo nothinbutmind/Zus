@@ -1,0 +1,7 @@
+[package]
+name = "userslist"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+rs_merkle = "1.5.0"
