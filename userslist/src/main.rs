@@ -1,25 +1,50 @@
 mod error;
 mod merkle;
+mod postgres;
 mod r#type;
 
-use crate::merkle::{AppState, create_tree, get_tree, get_tree_proof, health, list_creator_trees};
+use crate::merkle::{
+    AppState, create_campaign, get_campaign, get_claim_payload_by_body, get_claim_payload_by_path,
+    health, list_creator_campaigns,
+};
+use crate::postgres::init_db;
 use axum::{
     Router,
     routing::{get, post},
 };
+use dotenvy::dotenv;
+use sqlx::postgres::PgPoolOptions;
 use std::{env, net::SocketAddr, sync::Arc};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let state = Arc::new(AppState::default());
+    dotenv().ok();
+
+    let database_url = env::var("DATABASE_URL")
+        .map_err(|_| "DATABASE_URL must be set to connect to PostgreSQL")?;
+    let pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&database_url)
+        .await?;
+
+    init_db(&pool).await?;
+
+    let state = Arc::new(AppState { pool });
     let app = Router::new()
         .route("/health", get(health))
-        .route("/trees", post(create_tree))
-        .route("/trees/:tree_id", get(get_tree))
-        .route("/trees/:tree_id/proof/:leaf_address", get(get_tree_proof))
+        .route("/campaigns", post(create_campaign))
+        .route("/campaigns/:campaign_id", get(get_campaign))
         .route(
-            "/campaign-creators/:campaign_creator_address/trees",
-            get(list_creator_trees),
+            "/campaigns/:campaign_id/claim",
+            post(get_claim_payload_by_body),
+        )
+        .route(
+            "/campaigns/:campaign_id/claim/:leaf_address",
+            get(get_claim_payload_by_path),
+        )
+        .route(
+            "/campaign-creators/:campaign_creator_address/campaigns",
+            get(list_creator_campaigns),
         )
         .with_state(state);
 
