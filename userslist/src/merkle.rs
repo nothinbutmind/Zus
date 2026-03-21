@@ -1,6 +1,6 @@
 use crate::{
     error::AppError,
-    r#type::{
+    types::{
         CampaignSummary, ClaimLookupRequest, ClaimPayloadResponse, CreateCampaignRequest,
         CreatorCampaignsResponse, HealthResponse, PreparedCampaign, PreparedClaim, RecipientInput,
     },

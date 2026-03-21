@@ -1,7 +1,7 @@
 mod error;
 mod merkle;
 mod postgres;
-mod r#type;
+mod types;
 
 use crate::merkle::{
     AppState, create_campaign, get_campaign, get_claim_payload_by_body, get_claim_payload_by_path,
