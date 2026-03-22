@@ -33,17 +33,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = Router::new()
         .route("/health", get(health))
         .route("/campaigns", get(list_campaigns).post(create_campaign))
-        .route("/campaigns/:campaign_id", get(get_campaign))
+        .route("/campaigns/{campaign_id}", get(get_campaign))
         .route(
-            "/campaigns/:campaign_id/claim",
+            "/campaigns/{campaign_id}/claim",
             post(get_claim_payload_by_body),
         )
         .route(
-            "/campaigns/:campaign_id/claim/:leaf_address",
+            "/campaigns/{campaign_id}/claim/{leaf_address}",
             get(get_claim_payload_by_path),
         )
         .route(
-            "/campaign-creators/:campaign_creator_address/campaigns",
+            "/campaign-creators/{campaign_creator_address}/campaigns",
             get(list_creator_campaigns),
         )
         .with_state(state);
