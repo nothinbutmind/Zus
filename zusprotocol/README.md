@@ -87,3 +87,46 @@ You can override either if you spin a new proof domain:
   --rpc-url "$RPC_URL" \
   --private-key "$PRIVATE_KEY"
 ```
+
+## Claim
+
+Once a campaign exists and you have generated the Noir proof artifacts, you can preview and send the claim with:
+
+```bash
+./scripts/claim_campaign.sh \
+  --protocol 0xYourZusProtocol \
+  --campaign-uuid 12345678-1234-1234-1234-123456789abc \
+  --rpc-url https://avalanche-fuji.drpc.org \
+  --private-key "$PRIVATE_KEY"
+```
+
+By default that script reads:
+
+- `../verifier/generated/stealthdrop/proof_test/proof`
+- `../verifier/generated/stealthdrop/proof_test/public_inputs`
+
+## Full API E2E Demo
+
+If your Rust API is live, there is also a single named demo flow that goes through the API first:
+
+```bash
+./scripts/e2e_api_campaign_demo.sh \
+  --protocol 0xYourZusProtocol \
+  --rpc-url https://avalanche-fuji.drpc.org \
+  --private-key "$PRIVATE_KEY" \
+  --api-base-url http://127.0.0.1:3000 \
+  --test-name "Fuji API E2E Demo"
+```
+
+That script:
+
+1. creates a campaign in the Rust API with your chosen test name
+2. reads back `campaign_id`, `onchain_campaign_id`, and `merkle_root`
+3. creates the matching onchain campaign
+4. fetches the Rust API claim payload for the demo recipient
+5. writes `zus_addy/Prover.toml`
+6. runs `nargo execute`
+7. runs `bb prove`
+8. sends `claim(...)` to `ZusProtocol`
+
+The default demo recipient is the public Anvil test wallet already used in this repo, so the whole flow is deterministic for MVP testing.
