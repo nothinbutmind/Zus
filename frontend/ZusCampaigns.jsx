@@ -6,6 +6,7 @@ import {
   encodeFunctionData,
   http,
   isAddress,
+  parseEther,
   stringToHex,
   toHex,
 } from "viem";
@@ -23,6 +24,7 @@ const MONO = "'Share Tech Mono', monospace";
 const BORDER = "rgba(0,255,200,.08)";
 const BORDER_HOV = "rgba(0,255,200,.25)";
 const TREE_MAX_LEAVES = 1 << 12;
+const FUJI_EXPLORER_SITE_URL = "https://testnet.snowtrace.io/";
 const EMPTY_CREATE_STATE = {
   loading: false,
   error: "",
@@ -125,6 +127,28 @@ function parseRecipients(text) {
       amount,
     };
   });
+}
+
+function parseAvaxAmount(value, label) {
+  const trimmed = value.trim();
+
+  if (!trimmed) {
+    throw new Error(`${label} is required.`);
+  }
+
+  if (!/^\d+(\.\d+)?$/.test(trimmed)) {
+    throw new Error(`${label} must be an AVAX amount like 0.1 or 1.`);
+  }
+
+  const wei = parseEther(trimmed);
+  if (wei <= 0n) {
+    throw new Error(`${label} must be greater than 0 AVAX.`);
+  }
+
+  return {
+    avax: trimmed,
+    wei: wei.toString(),
+  };
 }
 
 function makeExplorerUrl(hash) {
@@ -318,7 +342,7 @@ function useTypewriter(text, speed = 22, delay = 0) {
   return { out, done };
 }
 
-function JsonPanel({ campaignName, instant, merkle, payoutWei, fundingWei, recipients }) {
+function JsonPanel({ campaignName, instant, merkle, payoutAvax, fundingAvax, recipients }) {
   const sampleRecipients = recipients.slice(0, 2);
   const previewRecipients =
     sampleRecipients.length > 0
@@ -331,12 +355,17 @@ function JsonPanel({ campaignName, instant, merkle, payoutWei, fundingWei, recip
           { address: "0x709979...79c8", amount: "1" },
         ];
 
+  const payoutWei = parseEther(payoutAvax || appConfig.defaultPayoutAvax).toString();
+  const fundingWei = parseEther(fundingAvax || appConfig.defaultFundingAvax).toString();
   const dynamic = `{
   "name": "${campaignName || "ZUS_AIRDROP_PROXIMA"}",
+  "network": "${appConfig.networkName}",
   "instant_release": ${instant},
   "merkle_verified": ${merkle},
-  "payout_wei": "${payoutWei || appConfig.defaultPayoutWei}",
-  "funding_wei": "${fundingWei || appConfig.defaultFundingWei}",
+  "payout_avax": "${payoutAvax || appConfig.defaultPayoutAvax}",
+  "funding_avax": "${fundingAvax || appConfig.defaultFundingAvax}",
+  "payout_wei": "${payoutWei}",
+  "funding_wei": "${fundingWei}",
   "recipients": ${JSON.stringify(previewRecipients, null, 2)}
 }`;
 
@@ -731,8 +760,8 @@ export default function ZusCampaigns({ wallet, onConnect, onNavigateHome, onNavi
   const [instant, setInstant] = useState(true);
   const [merkle, setMerkle] = useState(true);
   const [walletHov, setWalletHov] = useState(false);
-  const [payoutWei, setPayoutWei] = useState(appConfig.defaultPayoutWei);
-  const [fundingWei, setFundingWei] = useState(appConfig.defaultFundingWei);
+  const [payoutAvax, setPayoutAvax] = useState(appConfig.defaultPayoutAvax);
+  const [fundingAvax, setFundingAvax] = useState(appConfig.defaultFundingAvax);
   const [recipientText, setRecipientText] = useState(SAMPLE_RECIPIENTS);
   const [campaigns, setCampaigns] = useState([]);
   const [campaignsLoading, setCampaignsLoading] = useState(true);
@@ -793,8 +822,8 @@ export default function ZusCampaigns({ wallet, onConnect, onNavigateHome, onNavi
     setCampaignName("");
     setInstant(true);
     setMerkle(true);
-    setPayoutWei(appConfig.defaultPayoutWei);
-    setFundingWei(appConfig.defaultFundingWei);
+    setPayoutAvax(appConfig.defaultPayoutAvax);
+    setFundingAvax(appConfig.defaultFundingAvax);
     setRecipientText(SAMPLE_RECIPIENTS);
   };
 
@@ -809,13 +838,8 @@ export default function ZusCampaigns({ wallet, onConnect, onNavigateHome, onNavi
       throw new Error("Campaign name is required.");
     }
 
-    if (!/^[0-9]+$/.test(payoutWei.trim())) {
-      throw new Error("Payout wei must be a base-10 integer.");
-    }
-
-    if (!/^[0-9]+$/.test(fundingWei.trim())) {
-      throw new Error("Funding wei must be a base-10 integer.");
-    }
+    const payout = parseAvaxAmount(payoutAvax, "Payout AVAX");
+    const funding = parseAvaxAmount(fundingAvax, "Funding AVAX");
 
     const recipients = parseRecipients(recipientText);
     const creatorAddress = wallet.account;
@@ -824,13 +848,60 @@ export default function ZusCampaigns({ wallet, onConnect, onNavigateHome, onNavi
       throw new Error("Press CONNECT WALLET before creating campaigns.");
     }
 
+    if (BigInt(funding.wei) < BigInt(payout.wei)) {
+      throw new Error("Funding AVAX must cover at least one payout.");
+    }
+
     return {
       name: trimmedName,
-      payoutWei: payoutWei.trim(),
-      fundingWei: fundingWei.trim(),
+      payoutAvax: payout.avax,
+      fundingAvax: funding.avax,
+      payoutWei: payout.wei,
+      fundingWei: funding.wei,
       recipients,
       creatorAddress,
     };
+  };
+
+  const ensureAvalancheFuji = async () => {
+    if (!window.ethereum?.request) {
+      throw new Error("No injected wallet found for the Avalanche transaction.");
+    }
+
+    const chainIdHex = await window.ethereum.request({ method: "eth_chainId" });
+    const currentChainId = chainIdHex ? Number.parseInt(chainIdHex, 16) : 0;
+
+    if (currentChainId === appConfig.chainId) {
+      return;
+    }
+
+    try {
+      await window.ethereum.request({
+        method: "wallet_switchEthereumChain",
+        params: [{ chainId: appConfig.chainHexId }],
+      });
+    } catch (error) {
+      if (error?.code !== 4902) {
+        throw error;
+      }
+
+      await window.ethereum.request({
+        method: "wallet_addEthereumChain",
+        params: [
+          {
+            chainId: appConfig.chainHexId,
+            chainName: appConfig.networkName,
+            nativeCurrency: {
+              name: "Avalanche",
+              symbol: "AVAX",
+              decimals: 18,
+            },
+            rpcUrls: [appConfig.rpcUrl],
+            blockExplorerUrls: [appConfig.explorerSiteUrl || FUJI_EXPLORER_SITE_URL],
+          },
+        ],
+      });
+    }
   };
 
   const deployOnchainCampaign = async (deployment) => {
@@ -846,10 +917,12 @@ export default function ZusCampaigns({ wallet, onConnect, onNavigateHome, onNavi
     setCreateState({
       loading: true,
       error: "",
-      success: "Rust API campaign ready. Waiting for wallet signature...",
+      success: `Rust API campaign ready. Switching to ${appConfig.networkName} and waiting for wallet signature...`,
       txHash: "",
       apiCampaign: deployment.apiCampaign,
     });
+
+    await ensureAvalancheFuji();
 
     const walletClient = createWalletClient({
       transport: custom(window.ethereum),
@@ -950,6 +1023,8 @@ export default function ZusCampaigns({ wallet, onConnect, onNavigateHome, onNavi
 
       deployment = {
         apiCampaign,
+        payoutAvax: validated.payoutAvax,
+        fundingAvax: validated.fundingAvax,
         payoutWei: validated.payoutWei,
         fundingWei: validated.fundingWei,
       };
@@ -1198,7 +1273,7 @@ export default function ZusCampaigns({ wallet, onConnect, onNavigateHome, onNavi
                 </h1>
                 <div style={{ fontFamily: MONO, fontSize: 8, color: MUTED2, letterSpacing: 1.2, lineHeight: 1.8, marginBottom: 28 }}>
                   GET /campaigns READS THE LIVE RUST API STREAM. CREATE CAMPAIGN POSTS TO THE API FIRST,
-                  THEN CALLS THE ZUSPROTOCOL CONTRACT WITH YOUR ENV-CONFIGURED RPC + CONTRACT SETTINGS.
+                  THEN SWITCHES TO {appConfig.networkName.toUpperCase()} AND CALLS THE ZUSPROTOCOL CONTRACT.
                 </div>
               </div>
 
@@ -1280,12 +1355,12 @@ export default function ZusCampaigns({ wallet, onConnect, onNavigateHome, onNavi
                     <div className="campaign-card-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 24 }}>
                       <div>
                         <label style={{ fontFamily: MONO, fontSize: 8, color: MUTED2, letterSpacing: 2, display: "block", marginBottom: 10 }}>
-                          PAYOUT_WEI
+                          PAYOUT_AVAX
                         </label>
                         <input
-                          value={payoutWei}
-                          onChange={(event) => setPayoutWei(event.target.value)}
-                          placeholder={appConfig.defaultPayoutWei}
+                          value={payoutAvax}
+                          onChange={(event) => setPayoutAvax(event.target.value)}
+                          placeholder={appConfig.defaultPayoutAvax}
                           style={{
                             width: "100%",
                             fontFamily: MONO,
@@ -1297,15 +1372,18 @@ export default function ZusCampaigns({ wallet, onConnect, onNavigateHome, onNavi
                             letterSpacing: 1,
                           }}
                         />
+                        <div style={{ fontFamily: MONO, fontSize: 8, color: MUTED2, letterSpacing: 1, marginTop: 8, lineHeight: 1.6 }}>
+                          AVAX PER ELIGIBLE CLAIM. THE CONTRACT STILL RECEIVES WEI UNDER THE HOOD.
+                        </div>
                       </div>
                       <div>
                         <label style={{ fontFamily: MONO, fontSize: 8, color: MUTED2, letterSpacing: 2, display: "block", marginBottom: 10 }}>
-                          FUNDING_WEI
+                          FUNDING_AVAX
                         </label>
                         <input
-                          value={fundingWei}
-                          onChange={(event) => setFundingWei(event.target.value)}
-                          placeholder={appConfig.defaultFundingWei}
+                          value={fundingAvax}
+                          onChange={(event) => setFundingAvax(event.target.value)}
+                          placeholder={appConfig.defaultFundingAvax}
                           style={{
                             width: "100%",
                             fontFamily: MONO,
@@ -1317,6 +1395,9 @@ export default function ZusCampaigns({ wallet, onConnect, onNavigateHome, onNavi
                             letterSpacing: 1,
                           }}
                         />
+                        <div style={{ fontFamily: MONO, fontSize: 8, color: MUTED2, letterSpacing: 1, marginTop: 8, lineHeight: 1.6 }}>
+                          TOTAL AVAX ATTACHED TO THE CREATE TX ON {appConfig.networkName.toUpperCase()}.
+                        </div>
                       </div>
                     </div>
 
@@ -1345,6 +1426,8 @@ export default function ZusCampaigns({ wallet, onConnect, onNavigateHome, onNavi
                         ONE RECIPIENT PER LINE. FORMAT: 0xABC...,1
                         <br />
                         CREATOR WALLET: <span style={{ color: wallet.account ? CYAN : MUTED }}>{wallet.account || "CONNECT WALLET"}</span>
+                        <br />
+                        TARGET NETWORK: <span style={{ color: CYAN }}>{appConfig.networkName.toUpperCase()}</span>
                       </div>
                     </div>
 
@@ -1369,7 +1452,7 @@ export default function ZusCampaigns({ wallet, onConnect, onNavigateHome, onNavi
                               ? "PENDING ONCHAIN DEPLOYMENT"
                               : createState.success
                                 ? "CAMPAIGN DEPLOYED"
-                                : "SYSTEM READY: AWAITING CONFIG"}
+                                : `READY FOR ${appConfig.networkName.toUpperCase()}`}
                         </span>
                       </div>
                       <Btn
@@ -1398,8 +1481,8 @@ export default function ZusCampaigns({ wallet, onConnect, onNavigateHome, onNavi
                     campaignName={campaignName}
                     instant={instant}
                     merkle={merkle}
-                    payoutWei={payoutWei}
-                    fundingWei={fundingWei}
+                    payoutAvax={payoutAvax}
+                    fundingAvax={fundingAvax}
                     recipients={parsedRecipientsForPreview}
                   />
                 </div>

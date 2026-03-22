@@ -29,6 +29,7 @@ use ratatui::{
     text::{Line, Span, Text},
     widgets::{Block, Borders, Clear, List, ListItem, Padding, Paragraph, Wrap},
 };
+use num_bigint::{BigInt, BigUint, Sign};
 use reqwest::{StatusCode, blocking::Client};
 
 const LOGO: &[&str] = &[
@@ -59,6 +60,8 @@ const MVP_NOIR_STEALTH_TWEAK: [u8; 32] = [
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     0, 7,
 ];
+const BN254_FIELD_MODULUS_DECIMAL: &str =
+    "21888242871839275222246405745257275088548364400416034343698204186575808495617";
 
 struct CampaignLookupResult {
     campaign: ApiCampaignSummary,
@@ -348,7 +351,8 @@ fn render_actions(frame: &mut Frame, area: Rect, app: &App) {
         Block::default()
             .title(title)
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan)),
+            .border_style(Style::default().fg(Color::Cyan))
+            .style(Style::default().bg(Color::Black)),
     );
     frame.render_widget(widget, area);
 }
@@ -395,7 +399,8 @@ fn render_form_info(frame: &mut Frame, area: Rect, app: &App) {
         Block::default()
             .title(" Command Deck ")
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Blue)),
+            .border_style(Style::default().fg(Color::Blue))
+            .style(Style::default().bg(Color::Black)),
     );
     frame.render_widget(info, area);
 }
@@ -434,7 +439,7 @@ fn render_fields(frame: &mut Frame, area: Rect, app: &App) {
                 Line::from(vec![
                     Span::styled(field.label, label_style),
                     Span::styled(required, Style::default().fg(Color::Yellow)),
-                    Span::raw(": "),
+                    Span::styled(" : ", Style::default().fg(Color::DarkGray)),
                     Span::styled(value, value_style),
                 ]),
                 Line::from(""),
@@ -454,6 +459,7 @@ fn render_fields(frame: &mut Frame, area: Rect, app: &App) {
                 .title(title)
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Green))
+                .style(Style::default().bg(Color::Black))
                 .padding(Padding::horizontal(1)),
         )
         .wrap(Wrap { trim: false });
@@ -485,13 +491,30 @@ fn mask_sensitive_value(value: &str) -> String {
     "*".repeat(value.chars().count())
 }
 
+fn compact_output_title(value: &str) -> String {
+    const MAX_CHARS: usize = 58;
+    let trimmed = value.trim();
+    if trimmed.chars().count() <= MAX_CHARS {
+        return trimmed.to_string();
+    }
+
+    let shortened = trimmed
+        .chars()
+        .take(MAX_CHARS.saturating_sub(1))
+        .collect::<String>();
+    format!("{shortened}…")
+}
+
 fn render_output(frame: &mut Frame, area: Rect, app: &App) {
     let widget = Paragraph::new(app.output.as_str())
+        .style(Style::default().fg(Color::White).bg(Color::Black))
         .block(
             Block::default()
-                .title(format!(" Output | {} ", app.last_command))
+                .title(format!(" Output | {} ", compact_output_title(&app.last_command)))
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Magenta)),
+                .border_style(Style::default().fg(Color::Magenta))
+                .style(Style::default().bg(Color::Black))
+                .padding(Padding::horizontal(1)),
         )
         .wrap(Wrap { trim: false });
     frame.render_widget(widget, area);
@@ -1049,19 +1072,19 @@ fn build_prover_toml_contents(
     claim: &ApiClaimPayload,
     secrets: &AutoWitnessSecrets,
 ) -> AppResult<String> {
+    let eligible_index = canonicalize_field_decimal(&claim.noir_inputs.eligible_index)?;
+    let eligible_path = claim
+        .noir_inputs
+        .eligible_path
+        .iter()
+        .map(|value| canonicalize_field_decimal(value))
+        .collect::<AppResult<Vec<_>>>()?;
+    let eligible_root = canonicalize_field_decimal(&claim.noir_inputs.eligible_root)?;
+
     let mut prover = String::new();
-    prover.push_str(&format_field_scalar_toml(
-        "eligible_index",
-        &claim.noir_inputs.eligible_index,
-    ));
-    prover.push_str(&format_string_array_toml(
-        "eligible_path",
-        &claim.noir_inputs.eligible_path,
-    ));
-    prover.push_str(&format_field_scalar_toml(
-        "eligible_root",
-        &claim.noir_inputs.eligible_root,
-    ));
+    prover.push_str(&format_field_scalar_toml("eligible_index", &eligible_index));
+    prover.push_str(&format_string_array_toml("eligible_path", &eligible_path));
+    prover.push_str(&format_field_scalar_toml("eligible_root", &eligible_root));
     prover.push_str(&format_u8_array_toml("message", &secrets.message));
     prover.push_str(&format_u8_array_toml(
         "stealth_tweak",
@@ -1069,6 +1092,29 @@ fn build_prover_toml_contents(
     ));
     prover.push_str(&format_u8_array_toml("wallet_secret", &wallet.wallet_secret));
     Ok(prover)
+}
+
+fn canonicalize_field_decimal(raw: &str) -> AppResult<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::message("field value cannot be empty"));
+    }
+
+    if trimmed.chars().all(|character| character.is_ascii_digit()) {
+        return Ok(trimmed.to_string());
+    }
+
+    let value = BigInt::parse_bytes(trimmed.as_bytes(), 10).ok_or_else(|| {
+        AppError::message(format!("failed to parse field integer from API: {trimmed}"))
+    })?;
+    let modulus = BigUint::parse_bytes(BN254_FIELD_MODULUS_DECIMAL.as_bytes(), 10)
+        .ok_or_else(|| AppError::message("failed to parse BN254 field modulus"))?;
+    let modulus_bigint = BigInt::from_biguint(Sign::Plus, modulus.clone());
+    let normalized = ((value % &modulus_bigint) + &modulus_bigint) % &modulus_bigint;
+    let normalized_biguint = normalized.to_biguint().ok_or_else(|| {
+        AppError::message("normalized field value must be non-negative".to_string())
+    })?;
+    Ok(normalized_biguint.to_str_radix(10))
 }
 
 fn resolve_onchain_campaign_id(claim: &ApiClaimPayload) -> AppResult<String> {
@@ -1669,8 +1715,8 @@ fn lookup_claim_for_campaign(
 
 fn format_campaign_catalog_output(api_base: &str, campaigns: &[ApiCampaignSummary]) -> String {
     let mut output = String::new();
-    let _ = writeln!(output, "API base: {api_base}");
-    let _ = writeln!(output, "Campaigns loaded: {}", campaigns.len());
+    let _ = writeln!(output, "API base      {}", api_base);
+    let _ = writeln!(output, "Campaigns     {}", campaigns.len());
 
     if campaigns.is_empty() {
         let _ = writeln!(output);
@@ -1681,12 +1727,13 @@ fn format_campaign_catalog_output(api_base: &str, campaigns: &[ApiCampaignSummar
     let _ = writeln!(output);
     let _ = writeln!(
         output,
-        "Add a wallet address and press Enter again to fetch Noir claim inputs per campaign."
+        "Add a wallet address and press Enter again to check claimability."
     );
+    let _ = writeln!(output);
 
     for (index, campaign) in campaigns.iter().enumerate() {
-        write_campaign_header(&mut output, index, campaign);
-        let _ = writeln!(output, "status: catalog only");
+        write_campaign_summary(&mut output, index, campaign);
+        let _ = writeln!(output, "status        catalog only");
         let _ = writeln!(output);
     }
 
@@ -1712,60 +1759,59 @@ fn format_campaign_lookup_output(
         .filter(|lookup| matches!(lookup.claim_status, ClaimStatus::Error(_)))
         .count();
 
-    let _ = writeln!(output, "API base: {api_base}");
-    let _ = writeln!(output, "Wallet address: {wallet_address}");
-    let _ = writeln!(output, "Campaigns loaded: {}", lookups.len());
-    let _ = writeln!(output, "Eligible campaigns: {eligible_count}");
-    let _ = writeln!(output, "No-claim campaigns: {missing_count}");
-    let _ = writeln!(output, "Errored lookups: {error_count}");
+    let _ = writeln!(output, "API base      {}", api_base);
+    let _ = writeln!(output, "Wallet        {}", compact_middle(wallet_address, 10, 6));
+    let _ = writeln!(output, "Campaigns     {}", lookups.len());
+    let _ = writeln!(output, "Eligible      {eligible_count}");
+    let _ = writeln!(output, "No claim      {missing_count}");
+    let _ = writeln!(output, "Errors        {error_count}");
     let _ = writeln!(output);
-    let _ = writeln!(
-        output,
-        "Wallet-side Noir fields now come from your ratatui wallet flow as: wallet_secret, stealth_tweak, message. The circuit derives the pubkey and nullifier itself."
-    );
+    let _ = writeln!(output, "Claim details come from the Rust API. Proof generation happens in Prove + Claim.");
+    let _ = writeln!(output);
 
     for (index, lookup) in lookups.iter().enumerate() {
-        write_campaign_header(&mut output, index, &lookup.campaign);
+        write_campaign_summary(&mut output, index, &lookup.campaign);
         match &lookup.claim_status {
             ClaimStatus::Eligible(claim) => {
-                let _ = writeln!(output, "status: eligible");
-                let _ = writeln!(output, "claim_campaign_id: {}", claim.campaign_id);
+                let _ = writeln!(output, "status        eligible");
+                let _ = writeln!(
+                    output,
+                    "claim_id      {}",
+                    compact_middle(&claim.campaign_id, 8, 6)
+                );
                 if let Some(onchain_campaign_id) = claim.onchain_campaign_id.as_deref() {
-                    let _ = writeln!(output, "claim_onchain_campaign_id: {}", onchain_campaign_id);
+                    let _ = writeln!(
+                        output,
+                        "onchain_id    {}",
+                        compact_middle(onchain_campaign_id, 12, 8)
+                    );
                 }
-                let _ = writeln!(output, "claim_name: {}", claim.name);
                 let _ = writeln!(
                     output,
-                    "claim_campaign_creator_address: {}",
-                    claim.campaign_creator_address
+                    "leaf          {}",
+                    compact_middle(&claim.leaf_address, 10, 6)
                 );
-                let _ = writeln!(output, "amount: {}", claim.amount);
-                let _ = writeln!(output, "leaf_address: {}", claim.leaf_address);
-                let _ = writeln!(output, "leaf_index: {}", claim.index);
-                let _ = writeln!(output, "leaf_value: {}", claim.leaf_value);
-                let _ = writeln!(output, "proof_path_len: {}", claim.proof.len());
-                let _ = writeln!(output, "claim_merkle_root: {}", claim.merkle_root);
-                let _ = writeln!(output, "claim_hash_algorithm: {}", claim.hash_algorithm);
-                let _ = writeln!(output, "claim_leaf_encoding: {}", claim.leaf_encoding);
-                let _ = writeln!(output, "eligible_root: {}", claim.noir_inputs.eligible_root);
                 let _ = writeln!(
                     output,
-                    "eligible_index: {}",
-                    claim.noir_inputs.eligible_index
+                    "creator       {}",
+                    compact_middle(&claim.campaign_creator_address, 10, 6)
                 );
-                let _ = writeln!(output, "noir_leaf_value: {}", claim.noir_inputs.leaf_value);
-                let _ = writeln!(output, "tree_depth: {}", claim.noir_inputs.tree_depth);
-                let _ = writeln!(output, "eligible_path:");
-                for (path_index, item) in claim.noir_inputs.eligible_path.iter().enumerate() {
-                    let _ = writeln!(output, "  [{path_index}] {item}");
-                }
+                let _ = writeln!(output, "amount        {}", claim.amount);
+                let _ = writeln!(output, "leaf_index    {}", claim.index);
+                let _ = writeln!(
+                    output,
+                    "eligible_root {}",
+                    compact_middle(&claim.noir_inputs.eligible_root, 16, 10)
+                );
+                let _ = writeln!(output, "proof_nodes   {}", claim.proof.len());
+                let _ = writeln!(output, "tree_depth    {}", claim.noir_inputs.tree_depth);
             }
             ClaimStatus::Missing => {
-                let _ = writeln!(output, "status: no claim for this wallet address");
+                let _ = writeln!(output, "status        no claim for this wallet");
             }
             ClaimStatus::Error(message) => {
-                let _ = writeln!(output, "status: lookup error");
-                let _ = writeln!(output, "error: {message}");
+                let _ = writeln!(output, "status        lookup error");
+                let _ = writeln!(output, "error         {message}");
             }
         }
         let _ = writeln!(output);
@@ -1774,22 +1820,52 @@ fn format_campaign_lookup_output(
     output
 }
 
-fn write_campaign_header(output: &mut String, index: usize, campaign: &ApiCampaignSummary) {
+fn write_campaign_summary(output: &mut String, index: usize, campaign: &ApiCampaignSummary) {
     let _ = writeln!(output, "[{}] {}", index + 1, campaign.name);
-    let _ = writeln!(output, "campaign_id: {}", campaign.campaign_id);
+    let _ = writeln!(
+        output,
+        "campaign_id   {}",
+        compact_middle(&campaign.campaign_id, 8, 6)
+    );
     if let Some(onchain_campaign_id) = campaign.onchain_campaign_id.as_deref() {
-        let _ = writeln!(output, "onchain_campaign_id: {}", onchain_campaign_id);
+        let _ = writeln!(
+            output,
+            "onchain_id    {}",
+            compact_middle(onchain_campaign_id, 12, 8)
+        );
     }
     let _ = writeln!(
         output,
-        "campaign_creator_address: {}",
-        campaign.campaign_creator_address
+        "creator       {}",
+        compact_middle(&campaign.campaign_creator_address, 10, 6)
     );
-    let _ = writeln!(output, "merkle_root: {}", campaign.merkle_root);
-    let _ = writeln!(output, "leaf_count: {}", campaign.leaf_count);
-    let _ = writeln!(output, "depth: {}", campaign.depth);
-    let _ = writeln!(output, "hash_algorithm: {}", campaign.hash_algorithm);
-    let _ = writeln!(output, "leaf_encoding: {}", campaign.leaf_encoding);
+    let _ = writeln!(
+        output,
+        "merkle_root   {}",
+        compact_middle(&campaign.merkle_root, 16, 10)
+    );
+    let _ = writeln!(output, "tree          depth {}  leaves {}", campaign.depth, campaign.leaf_count);
+    let _ = writeln!(output, "hash          {}", campaign.hash_algorithm);
+}
+
+fn compact_middle(value: &str, prefix: usize, suffix: usize) -> String {
+    let trimmed = value.trim();
+    let chars = trimmed.chars().collect::<Vec<_>>();
+    if chars.len() <= prefix + suffix + 1 {
+        return trimmed.to_string();
+    }
+
+    let start = chars.iter().take(prefix).collect::<String>();
+    let end = chars
+        .iter()
+        .rev()
+        .take(suffix)
+        .copied()
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<String>();
+    format!("{start}…{end}")
 }
 
 fn run_cast_command(args: &[String]) -> AppResult<CommandResult> {

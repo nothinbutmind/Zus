@@ -114,7 +114,7 @@ impl App {
                             key: "api_base_url",
                             label: "API Base URL",
                             hint: "http://127.0.0.1:3000",
-                            value: "http://127.0.0.1:3000".to_string(),
+                            value: default_api_base_url(),
                             sensitive: false,
                             required: true,
                         },
@@ -317,7 +317,7 @@ impl App {
             output:
                 "Campaign Explorer checks claimability. Prove + Claim only needs Campaign, Wallet Account, and Keystore Password, then it auto-runs the full proof and claim flow."
                     .to_string(),
-            last_command: "GET http://127.0.0.1:3000/campaigns".to_string(),
+            last_command: format!("GET {}/campaigns", default_api_base_url()),
             status: "Ready".to_string(),
         }
     }

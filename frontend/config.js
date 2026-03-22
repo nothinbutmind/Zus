@@ -1,6 +1,12 @@
 import { formatEther, isAddress } from "viem";
 
 const DEFAULT_API_BASE_URL = "http://127.0.0.1:3000";
+const DEFAULT_RPC_URL = "https://avalanche-fuji.drpc.org";
+const DEFAULT_EXPLORER_BASE_URL = "https://testnet.snowtrace.io/tx/";
+const DEFAULT_CHAIN_ID = 43113;
+const DEFAULT_CHAIN_HEX_ID = "0xa869";
+const DEFAULT_NETWORK_NAME = "Avalanche Fuji";
+const DEFAULT_EXPLORER_SITE_URL = "https://testnet.snowtrace.io/";
 
 function cleanValue(value, fallback = "") {
   return typeof value === "string" && value.trim() ? value.trim() : fallback;
@@ -26,21 +32,27 @@ function defaultReadableAmount(readableEnv, weiEnv, fallback) {
 
 export const appConfig = {
   apiBaseUrl: cleanValue(import.meta.env.VITE_API_BASE_URL, DEFAULT_API_BASE_URL),
-  rpcUrl: cleanValue(import.meta.env.VITE_RPC_URL),
+  rpcUrl: cleanValue(import.meta.env.VITE_RPC_URL, DEFAULT_RPC_URL),
   protocolAddress: cleanValue(import.meta.env.VITE_ZUS_PROTOCOL_ADDRESS),
   verifierAddress: cleanValue(import.meta.env.VITE_ZUS_VERIFIER_ADDRESS),
   campaignMessage: cleanValue(import.meta.env.VITE_ZUS_CAMPAIGN_MESSAGE, "ZUSMVP01"),
-  defaultPayoutAmount: defaultReadableAmount(
+  defaultPayoutAvax: defaultReadableAmount(
     import.meta.env.VITE_ZUS_DEFAULT_PAYOUT_AVAX,
     import.meta.env.VITE_ZUS_DEFAULT_PAYOUT_WEI,
     "0.0001",
   ),
-  defaultFundingAmount: defaultReadableAmount(
+  defaultFundingAvax: defaultReadableAmount(
     import.meta.env.VITE_ZUS_DEFAULT_FUNDING_AVAX,
     import.meta.env.VITE_ZUS_DEFAULT_FUNDING_WEI,
     "0.0001",
   ),
-  explorerBaseUrl: cleanValue(import.meta.env.VITE_EXPLORER_BASE_URL),
+  defaultPayoutWei: cleanValue(import.meta.env.VITE_ZUS_DEFAULT_PAYOUT_WEI, "100000000000000"),
+  defaultFundingWei: cleanValue(import.meta.env.VITE_ZUS_DEFAULT_FUNDING_WEI, "100000000000000"),
+  explorerBaseUrl: cleanValue(import.meta.env.VITE_EXPLORER_BASE_URL, DEFAULT_EXPLORER_BASE_URL),
+  explorerSiteUrl: cleanValue(import.meta.env.VITE_EXPLORER_SITE_URL, DEFAULT_EXPLORER_SITE_URL),
+  chainId: Number.parseInt(cleanValue(import.meta.env.VITE_CHAIN_ID, `${DEFAULT_CHAIN_ID}`), 10),
+  chainHexId: cleanValue(import.meta.env.VITE_CHAIN_HEX_ID, DEFAULT_CHAIN_HEX_ID),
+  networkName: cleanValue(import.meta.env.VITE_NETWORK_NAME, DEFAULT_NETWORK_NAME),
 };
 
 export function resolveApiUrl(path) {

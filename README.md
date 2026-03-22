@@ -2,7 +2,7 @@
 
 Private reward distribution on Avalanche.
 
-ZUS lets a campaign creator fund a reward drop without exposing the recipient claim onchain. A claimant proves eligibility with a zk proof, the circuit derives a one-time stealth address, and `ZusProtocol` pays that stealth address.
+ZUS lets a campaign creator fund a reward drop without exposing the recipient list onchain. A claimant proves eligibility with a zk proof, the circuit derives a one-time stealth address, and `ZusProtocol` pays that stealth address.
 
 ![ZUS TUI](https://i.ibb.co/q3SLCCwk/Screenshot-2026-03-22-at-5-10-34-PM.png)
 

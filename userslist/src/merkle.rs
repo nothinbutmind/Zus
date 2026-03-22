@@ -542,7 +542,7 @@ fn poseidon2_hash_pair(
 }
 
 fn field_to_decimal_string(field: &FieldElement) -> String {
-    field.to_string()
+    BigUint::from_bytes_be(&field.to_be_bytes()).to_str_radix(10)
 }
 
 fn recipients_len(claims: &[PreparedClaim]) -> usize {
