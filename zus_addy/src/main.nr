@@ -1,4 +1,4 @@
-use bignum::{BigNum, Secp256k1_Fq as Secp256k1Fq};
+use bignum::{BigNum, Secp256k1_Fq as Secp256k1Fq, Secp256k1_Fr as Secp256k1Fr};
 use keccak256::keccak256;
 use noir_bigcurve::BigCurve;
 use noir_bigcurve::curves::secp256k1::{Secp256k1, Secp256k1Scalar};
@@ -73,9 +73,28 @@ fn to_eth_address(pub_key_x: [u8; 32], pub_key_y: [u8; 32]) -> Field {
     address
 }
 
+fn derive_stealth_address(
+    base_pubkey: Secp256k1,
+    stealth_tweak: Secp256k1Scalar,
+    base_address: Field,
+) -> Field {
+    let stealth_pubkey = base_pubkey + Secp256k1::one().mul(stealth_tweak);
+    assert(stealth_pubkey.is_infinity == false);
+
+    let stealth_address = to_eth_address(
+        stealth_pubkey.x.to_be_bytes(),
+        stealth_pubkey.y.to_be_bytes(),
+    );
+
+    // Keep payouts off the original allowlisted address.
+    assert(stealth_address != base_address);
+    stealth_address
+}
+
 fn main(
     pub_key_x: [u8; 32],
     pub_key_y: [u8; 32],
+    stealth_tweak: [u8; 32],
     message: pub [u8; 8],
     c: [u8; 32],
     s: [u8; 32],
@@ -84,10 +103,10 @@ fn main(
     eligible_root: pub Field,
     eligible_path: [Field; DEPTH],
     eligible_index: Field,
-    claimer: Field,
 ) -> pub Field {
-    let scalar_c = Secp256k1Scalar::from_bignum(Secp256k1Fq::from_be_bytes(c));
-    let scalar_s = Secp256k1Scalar::from_bignum(Secp256k1Fq::from_be_bytes(s));
+    let scalar_c = Secp256k1Scalar::from_bignum(Secp256k1Fr::from_be_bytes(c));
+    let scalar_s = Secp256k1Scalar::from_bignum(Secp256k1Fr::from_be_bytes(s));
+    let stealth_scalar = Secp256k1Scalar::from_bignum(Secp256k1Fr::from_be_bytes(stealth_tweak));
 
     let pubkey = Secp256k1 {
         x: Secp256k1Fq::from_be_bytes(pub_key_x),
@@ -108,5 +127,5 @@ fn main(
     let mt = MerkleTree::from(eligible_root, hasher);
     mt.membership(address, eligible_index, eligible_path);
 
-    claimer
+    derive_stealth_address(pubkey, stealth_scalar, address)
 }

@@ -2,22 +2,25 @@ use crate::{
     error::AppError,
     types::{
         CampaignSummary, ClaimLookupRequest, ClaimPayloadResponse, CreateCampaignRequest,
-        CreatorCampaignsResponse, HealthResponse, PreparedCampaign, PreparedClaim, RecipientInput,
+        CreatorCampaignsResponse, HealthResponse, NoirClaimInputs, PreparedCampaign,
+        PreparedClaim, RecipientInput,
     },
 };
 use axum::{
     Json,
     extract::{Path, State},
 };
+use acir_field::{AcirField, FieldElement};
+use bn254_blackbox_solver::poseidon2_permutation;
 use num_bigint::BigUint;
-use rs_merkle::{Hasher, MerkleTree, algorithms::Sha256};
 use sqlx::{FromRow, PgPool, types::Json as SqlJson};
 use std::{collections::HashSet, sync::Arc};
 use uuid::Uuid;
 
-const HASH_ALGORITHM: &str = "sha256";
-const LEAF_ENCODING: &str =
-    "sha256(abi.encodePacked(uint64 index, address leaf_address, uint256 amount))";
+const TREE_DEPTH: usize = 12;
+const MAX_RECIPIENTS: usize = 1 << TREE_DEPTH;
+const HASH_ALGORITHM: &str = "poseidon2_bn254";
+const LEAF_ENCODING: &str = "field(uint160(address))";
 
 pub struct AppState {
     pub pool: PgPool,
@@ -51,11 +54,18 @@ struct ClaimPayloadRow {
     leaf_address: String,
     amount: String,
     leaf_index: i32,
-    leaf_hash: String,
+    leaf_value: String,
     proof: SqlJson<Vec<String>>,
     merkle_root: String,
     hash_algorithm: String,
     leaf_encoding: String,
+}
+
+#[derive(Debug)]
+struct NoirMerkleArtifacts {
+    leaf_values: Vec<String>,
+    proofs: Vec<Vec<String>>,
+    root: String,
 }
 
 pub async fn health() -> Json<HealthResponse> {
@@ -210,7 +220,7 @@ async fn insert_campaign(pool: &PgPool, prepared: &PreparedCampaign) -> Result<(
         .bind(&claim.leaf_address)
         .bind(&claim.amount)
         .bind(claim.index)
-        .bind(&claim.leaf_hash)
+        .bind(&claim.leaf_value)
         .bind(SqlJson(&claim.proof))
         .execute(&mut *transaction)
         .await?;
@@ -234,7 +244,7 @@ async fn fetch_claim_payload(
             cc.leaf_address,
             cc.amount,
             cc.leaf_index,
-            cc.leaf_hash,
+            cc.leaf_hash AS leaf_value,
             cc.proof,
             c.merkle_root,
             c.hash_algorithm,
@@ -272,55 +282,37 @@ fn prepare_campaign(payload: CreateCampaignRequest) -> Result<PreparedCampaign, 
 
     let campaign_creator_address = normalize_address(&payload.campaign_creator_address)?;
     let recipients = normalize_recipients(&payload.recipients)?;
+    if recipients.len() > MAX_RECIPIENTS {
+        return Err(AppError::bad_request(format!(
+            "campaign supports at most {} recipients for a depth-{} Noir tree",
+            MAX_RECIPIENTS, TREE_DEPTH
+        )));
+    }
+
     let leaves = recipients
         .iter()
-        .enumerate()
-        .map(|(index, recipient)| {
-            build_leaf_hash(index, &recipient.leaf_address, &recipient.amount)
-        })
+        .map(|recipient| address_to_field(&recipient.leaf_address))
         .collect::<Result<Vec<_>, _>>()?;
-
-    let merkle_tree = MerkleTree::<Sha256>::from_leaves(&leaves);
-    let merkle_root = merkle_tree
-        .root_hex()
-        .map(hex_with_prefix)
-        .ok_or_else(|| AppError::internal("failed to compute the merkle root"))?;
-    let root_hash = merkle_tree
-        .root()
-        .ok_or_else(|| AppError::internal("failed to load the merkle root for proof generation"))?;
+    let merkle = build_noir_merkle_artifacts(&leaves)?;
 
     let claims = recipients
         .into_iter()
         .enumerate()
         .map(|(index, recipient)| {
-            let proof = merkle_tree.proof(&[index]);
-            let leaf = [leaves[index]];
-            let verified = proof.verify(root_hash, &[index], &leaf, leaves.len());
-            if !verified {
-                return Err(AppError::internal(format!(
-                    "generated proof failed verification for {}",
-                    recipient.leaf_address
-                )));
-            }
-
             Ok(PreparedClaim {
                 leaf_address: recipient.leaf_address,
                 amount: recipient.amount,
                 index: i32::try_from(index)
                     .map_err(|_| AppError::bad_request("too many recipients for i32 leaf index"))?,
-                leaf_hash: hex_with_prefix(hex::encode(leaves[index])),
-                proof: proof
-                    .proof_hashes_hex()
-                    .into_iter()
-                    .map(hex_with_prefix)
-                    .collect(),
+                leaf_value: merkle.leaf_values[index].clone(),
+                proof: merkle.proofs[index].clone(),
             })
         })
         .collect::<Result<Vec<_>, AppError>>()?;
 
     let campaign_id = Uuid::new_v4();
-    let leaf_count = leaves.len();
-    let depth = merkle_depth(leaf_count);
+    let leaf_count = recipients_len(&claims);
+    let depth = TREE_DEPTH;
 
     Ok(PreparedCampaign {
         campaign_id,
@@ -328,7 +320,7 @@ fn prepare_campaign(payload: CreateCampaignRequest) -> Result<PreparedCampaign, 
             campaign_id: campaign_id.to_string(),
             name: name.to_owned(),
             campaign_creator_address,
-            merkle_root,
+            merkle_root: merkle.root,
             leaf_count,
             depth,
             hash_algorithm: HASH_ALGORITHM.to_string(),
@@ -354,19 +346,31 @@ fn campaign_summary_from_row(row: CampaignSummaryRow) -> Result<CampaignSummary,
 }
 
 fn claim_payload_from_row(row: ClaimPayloadRow) -> Result<ClaimPayloadResponse, AppError> {
+    let index = usize::try_from(row.leaf_index)
+        .map_err(|_| AppError::internal("negative leaf index loaded from database"))?;
+    let proof = row.proof.0;
+    let merkle_root = row.merkle_root;
+    let leaf_value = row.leaf_value;
+
     Ok(ClaimPayloadResponse {
         campaign_id: row.campaign_id.to_string(),
         name: row.name,
         campaign_creator_address: row.campaign_creator_address,
         leaf_address: row.leaf_address,
         amount: row.amount,
-        index: usize::try_from(row.leaf_index)
-            .map_err(|_| AppError::internal("negative leaf index loaded from database"))?,
-        leaf_hash: row.leaf_hash,
-        proof: row.proof.0,
-        merkle_root: row.merkle_root,
+        index,
+        leaf_value: leaf_value.clone(),
+        proof: proof.clone(),
+        merkle_root: merkle_root.clone(),
         hash_algorithm: row.hash_algorithm,
         leaf_encoding: row.leaf_encoding,
+        noir_inputs: NoirClaimInputs {
+            eligible_root: merkle_root,
+            eligible_path: proof,
+            eligible_index: index.to_string(),
+            leaf_value,
+            tree_depth: TREE_DEPTH,
+        },
     })
 }
 
@@ -435,31 +439,74 @@ fn normalize_amount(amount: &str) -> Result<String, AppError> {
     Ok(parsed.to_str_radix(10))
 }
 
-fn build_leaf_hash(index: usize, leaf_address: &str, amount: &str) -> Result<[u8; 32], AppError> {
-    let leaf_bytes = build_leaf_bytes(index, leaf_address, amount)?;
-    Ok(Sha256::hash(&leaf_bytes))
+fn address_to_field(address: &str) -> Result<FieldElement, AppError> {
+    let address_bytes = decode_address_bytes(address)?;
+    Ok(FieldElement::from_be_bytes_reduce(&address_bytes))
 }
 
-fn build_leaf_bytes(index: usize, leaf_address: &str, amount: &str) -> Result<Vec<u8>, AppError> {
-    let index = u64::try_from(index)
-        .map_err(|_| AppError::bad_request("too many recipients for u64 index encoding"))?;
-    let address_bytes = decode_address_bytes(leaf_address)?;
-    let amount = parse_big_uint(amount)?;
-    let amount_bytes = amount.to_bytes_be();
+fn build_noir_merkle_artifacts(leaves: &[FieldElement]) -> Result<NoirMerkleArtifacts, AppError> {
+    let layer_width = 1usize << TREE_DEPTH;
+    let mut levels = Vec::with_capacity(TREE_DEPTH + 1);
+    let mut leaf_layer = vec![FieldElement::zero(); layer_width];
 
-    if amount_bytes.len() > 32 {
-        return Err(AppError::bad_request(
-            "amount exceeds uint256 size for leaf encoding",
-        ));
+    for (index, leaf) in leaves.iter().enumerate() {
+        leaf_layer[index] = *leaf;
     }
 
-    let mut leaf_bytes = Vec::with_capacity(8 + 20 + 32);
-    leaf_bytes.extend_from_slice(&index.to_be_bytes());
-    leaf_bytes.extend_from_slice(&address_bytes);
-    leaf_bytes.extend(vec![0u8; 32 - amount_bytes.len()]);
-    leaf_bytes.extend_from_slice(&amount_bytes);
+    levels.push(leaf_layer);
 
-    Ok(leaf_bytes)
+    for level in 0..TREE_DEPTH {
+        let current = &levels[level];
+        let mut next = Vec::with_capacity(current.len() / 2);
+
+        for pair in current.chunks_exact(2) {
+            next.push(poseidon2_hash_pair(&pair[0], &pair[1])?);
+        }
+
+        levels.push(next);
+    }
+
+    let proofs = (0..leaves.len())
+        .map(|original_index| {
+            let mut index = original_index;
+            let mut path = Vec::with_capacity(TREE_DEPTH);
+
+            for level in 0..TREE_DEPTH {
+                let sibling_index = index ^ 1;
+                path.push(field_to_decimal_string(&levels[level][sibling_index]));
+                index /= 2;
+            }
+
+            path
+        })
+        .collect();
+
+    Ok(NoirMerkleArtifacts {
+        leaf_values: leaves.iter().map(field_to_decimal_string).collect(),
+        proofs,
+        root: field_to_decimal_string(&levels[TREE_DEPTH][0]),
+    })
+}
+
+fn poseidon2_hash_pair(left: &FieldElement, right: &FieldElement) -> Result<FieldElement, AppError> {
+    let two_pow_64 = FieldElement::from(18_446_744_073_709_551_616u128);
+    let iv = FieldElement::from(2u128) * two_pow_64;
+    let state = [*left, *right, FieldElement::zero(), iv];
+    let output = poseidon2_permutation(&state, 4).map_err(|error| {
+        AppError::internal(format!(
+            "failed to compute Noir-compatible Poseidon2 permutation: {error}"
+        ))
+    })?;
+
+    Ok(output[0])
+}
+
+fn field_to_decimal_string(field: &FieldElement) -> String {
+    field.to_string()
+}
+
+fn recipients_len(claims: &[PreparedClaim]) -> usize {
+    claims.len()
 }
 
 fn decode_address_bytes(address: &str) -> Result<[u8; 20], AppError> {
@@ -482,17 +529,6 @@ fn parse_big_uint(value: &str) -> Result<BigUint, AppError> {
 fn parse_campaign_id(campaign_id: &str) -> Result<Uuid, AppError> {
     Uuid::parse_str(campaign_id)
         .map_err(|_| AppError::bad_request(format!("invalid campaign id: {}", campaign_id)))
-}
-
-fn hex_with_prefix(value: impl AsRef<str>) -> String {
-    format!("0x{}", value.as_ref())
-}
-
-fn merkle_depth(leaf_count: usize) -> usize {
-    match leaf_count {
-        0 | 1 => 0,
-        _ => usize::BITS as usize - (leaf_count - 1).leading_zeros() as usize,
-    }
 }
 
 #[cfg(test)]
@@ -526,10 +562,16 @@ mod tests {
 
         assert_eq!(prepared.summary.name, "summer airdrop");
         assert_eq!(prepared.summary.leaf_count, 3);
-        assert_eq!(prepared.summary.depth, 2);
+        assert_eq!(prepared.summary.depth, TREE_DEPTH);
+        assert_eq!(prepared.summary.hash_algorithm, HASH_ALGORITHM);
+        assert_eq!(prepared.summary.leaf_encoding, LEAF_ENCODING);
         assert_eq!(prepared.claims.len(), 3);
         assert_eq!(prepared.claims[1].amount, "250");
-        assert!(!prepared.claims[1].proof.is_empty());
+        assert_eq!(prepared.claims[0].leaf_value, "1");
+        assert_eq!(prepared.claims[1].leaf_value, "2");
+        assert_eq!(prepared.claims[2].leaf_value, "3");
+        assert_eq!(prepared.claims[1].proof.len(), TREE_DEPTH);
+        assert!(!prepared.summary.merkle_root.is_empty());
     }
 
     #[test]
@@ -545,6 +587,7 @@ mod tests {
 
         let prepared = prepare_campaign(request).expect("campaign should prepare");
         assert_eq!(prepared.claims[0].amount, "42");
+        assert_eq!(prepared.claims[0].leaf_value, "1");
     }
 
     #[test]
@@ -566,5 +609,17 @@ mod tests {
 
         let error = prepare_campaign(request).expect_err("duplicate addresses should fail");
         assert!(matches!(error, AppError::BadRequest(_)));
+    }
+
+    #[test]
+    fn noir_pair_hash_matches_the_noir_poseidon_package_output() {
+        let left = FieldElement::from(1u128);
+        let right = FieldElement::from(2u128);
+        let hash = poseidon2_hash_pair(&left, &right).expect("pair hash should succeed");
+
+        assert_eq!(
+            field_to_decimal_string(&hash),
+            "1594597865669602199208529098208508950092942746041644072252494753744672355203"
+        );
     }
 }

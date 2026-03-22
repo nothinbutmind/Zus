@@ -43,6 +43,15 @@ pub struct CreatorCampaignsResponse {
 }
 
 #[derive(Debug, Serialize)]
+pub struct NoirClaimInputs {
+    pub eligible_root: String,
+    pub eligible_path: Vec<String>,
+    pub eligible_index: String,
+    pub leaf_value: String,
+    pub tree_depth: usize,
+}
+
+#[derive(Debug, Serialize)]
 pub struct ClaimPayloadResponse {
     pub campaign_id: String,
     pub name: String,
@@ -50,11 +59,12 @@ pub struct ClaimPayloadResponse {
     pub leaf_address: String,
     pub amount: String,
     pub index: usize,
-    pub leaf_hash: String,
+    pub leaf_value: String,
     pub proof: Vec<String>,
     pub merkle_root: String,
     pub hash_algorithm: String,
     pub leaf_encoding: String,
+    pub noir_inputs: NoirClaimInputs,
 }
 
 #[derive(Debug, Clone)]
@@ -69,6 +79,6 @@ pub struct PreparedClaim {
     pub leaf_address: String,
     pub amount: String,
     pub index: i32,
-    pub leaf_hash: String,
+    pub leaf_value: String,
     pub proof: Vec<String>,
 }
