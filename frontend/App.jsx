@@ -1,44 +1,54 @@
-import { useEffect, useState } from "react";
-import {
-  createPublicClient,
-  createWalletClient,
-  custom,
-  encodeFunctionData,
-  parseEther,
-  http,
-  isAddress,
-  stringToHex,
-  toHex,
-} from "viem";
-import { appConfig, getCreateCampaignConfigErrors, resolveApiUrl } from "./config.js";
-import { zusProtocolAbi } from "./zusProtocolAbi.js";
+import { useEffect, useRef, useState } from "react";
+import { resolveApiUrl } from "./config.js";
+import ZusCampaigns from "./ZusCampaigns.jsx";
+import ZusRewards from "./ZusRewards.jsx";
+import ZusProtocolDetail from "./ZusProtocol_Detail.jsx";
 
 const HOME_HASH = "#/";
 const CAMPAIGNS_HASH = "#/campaigns";
-const EMPTY_RECIPIENT = { leaf_address: "", amount: "1" };
+const VAULT_HASH = "#/vault";
+const PROTOCOLS_HASH = "#/protocols";
+const SUBTITLE =
+  "Zus is a token-gated rewards protocol built on Avalanche — where eligibility is verified, identity stays hidden, and balances remain confidential.";
 
 function getCurrentRoute() {
   if (typeof window === "undefined") {
     return "home";
   }
 
-  return window.location.hash.startsWith(CAMPAIGNS_HASH) ? "campaigns" : "home";
+  if (window.location.hash.startsWith(CAMPAIGNS_HASH)) {
+    return "campaigns";
+  }
+
+  if (window.location.hash.startsWith(VAULT_HASH)) {
+    return "vault";
+  }
+
+  if (window.location.hash.startsWith(PROTOCOLS_HASH)) {
+    return "protocols";
+  }
+
+  return "home";
+}
+
+function getSelectedCampaignId() {
+  if (typeof window === "undefined") {
+    return "";
+  }
+
+  if (!window.location.hash.startsWith(`${PROTOCOLS_HASH}/`)) {
+    return "";
+  }
+
+  return decodeURIComponent(window.location.hash.slice(`${PROTOCOLS_HASH}/`.length));
 }
 
 function shortAddress(value) {
   if (!value) {
-    return "Not connected";
+    return "NOT_CONNECTED";
   }
 
   return `${value.slice(0, 6)}...${value.slice(-4)}`;
-}
-
-function shortHash(value) {
-  if (!value) {
-    return "";
-  }
-
-  return `${value.slice(0, 10)}...${value.slice(-8)}`;
 }
 
 function parseErrorMessage(error) {
@@ -50,13 +60,13 @@ function parseErrorMessage(error) {
     return error;
   }
 
-  const candidate =
+  return (
     error?.shortMessage ||
     error?.details ||
     error?.message ||
-    error?.cause?.message;
-
-  return typeof candidate === "string" ? candidate : "Something went wrong.";
+    error?.cause?.message ||
+    "Something went wrong."
+  );
 }
 
 function parseNativeAmount(label, rawValue, { allowZero = false } = {}) {
@@ -97,538 +107,890 @@ async function readJson(response) {
   }
 
   if (!response.ok) {
-    const message =
+    throw new Error(
       payload?.message ||
-      payload?.error ||
-      payload?.details ||
-      text ||
-      `Request failed with status ${response.status}`;
-
-    throw new Error(message);
+        payload?.error ||
+        payload?.details ||
+        text ||
+        `Request failed with status ${response.status}`,
+    );
   }
 
   return payload;
 }
 
-function makeExplorerUrl(hash) {
-  if (!hash || !appConfig.explorerBaseUrl) {
-    return "";
-  }
+function TypewriterSub() {
+  const [text, setText] = useState("");
+  const [done, setDone] = useState(false);
 
-  const base = appConfig.explorerBaseUrl.endsWith("/")
-    ? appConfig.explorerBaseUrl
-    : `${appConfig.explorerBaseUrl}/`;
+  useEffect(() => {
+    let index = 0;
+    let alive = true;
 
-  return `${base}${hash}`;
-}
+    const timer = setTimeout(function tick() {
+      if (!alive) {
+        return;
+      }
 
-function Button({
-  children,
-  onClick,
-  variant = "solid",
-  type = "button",
-  disabled = false,
-  className = "",
-}) {
-  const classes = [
-    "btn",
-    variant === "ghost" ? "btn-ghost" : "btn-solid",
-    disabled ? "is-disabled" : "",
-    className,
-  ]
-    .filter(Boolean)
-    .join(" ");
+      if (index <= SUBTITLE.length) {
+        setText(SUBTITLE.slice(0, index));
+        index += 1;
+        setTimeout(tick, 28);
+      } else {
+        setDone(true);
+      }
+    }, 1200);
+
+    return () => {
+      alive = false;
+      clearTimeout(timer);
+    };
+  }, []);
+
+  const highlight = (value) => {
+    const parts = value.split(/(built on Avalanche|remain confidential)/g);
+    return parts.map((part, index) =>
+      part === "built on Avalanche" || part === "remain confidential" ? (
+        <span key={index} style={{ color: "#00ddb0" }}>
+          {part}
+        </span>
+      ) : (
+        part
+      ),
+    );
+  };
 
   return (
-    <button className={classes} onClick={onClick} type={type} disabled={disabled}>
+    <p
+      className="typewriter-sub"
+      style={{
+        fontFamily: "'Share Tech Mono',monospace",
+        fontSize: 11,
+        color: "#3a6660",
+        maxWidth: 400,
+        margin: "24px auto 36px",
+        lineHeight: 1.9,
+        animation: "fadeUp .9s .6s both",
+        minHeight: 80,
+      }}
+    >
+      {highlight(text)}
+      {!done ? (
+        <span style={{ animation: "cur 0.7s steps(1) infinite", color: "#00ffc8" }}>▋</span>
+      ) : null}
+    </p>
+  );
+}
+
+function PixelCat() {
+  const [hovered, setHovered] = useState(false);
+  const pixels = [
+    "0011011100",
+    "0111111110",
+    "1111111111",
+    "1010110101",
+    "1111111111",
+    "0111111110",
+    "0101000101",
+    "0101000101",
+  ];
+
+  return (
+    <div
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        cursor: "pointer",
+        display: "inline-block",
+        transition: "transform .2s",
+        transform: hovered ? "scale(1.3) translateY(-2px)" : "scale(1)",
+      }}
+      title="=^._.^="
+    >
+      {pixels.map((row, rowIndex) => (
+        <div key={rowIndex} style={{ display: "flex" }}>
+          {row.split("").map((pixel, pixelIndex) => (
+            <div
+              key={pixelIndex}
+              style={{
+                width: 3,
+                height: 3,
+                background:
+                  pixel === "1" ? (hovered ? "#00ffc8" : "#00c49a") : "transparent",
+                boxShadow:
+                  pixel === "1" && hovered ? "0 0 4px rgba(0,255,200,.6)" : "none",
+                transition: "background .2s, box-shadow .2s",
+              }}
+            />
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function Glitch({ children, color }) {
+  const [active, setActive] = useState(false);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setActive(true);
+      setTimeout(() => setActive(false), 120);
+    }, 4200 + Math.random() * 2400);
+
+    return () => clearInterval(interval);
+  }, []);
+
+  return (
+    <span
+      style={{
+        display: "inline-block",
+        color,
+        animation: active ? "glitch .12s steps(2) both" : "none",
+      }}
+    >
+      {children}
+    </span>
+  );
+}
+
+function useReveal(threshold = 0.15) {
+  const ref = useRef(null);
+  const [visible, setVisible] = useState(false);
+
+  useEffect(() => {
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          setVisible(true);
+          observer.disconnect();
+        }
+      },
+      { threshold },
+    );
+
+    if (ref.current) {
+      observer.observe(ref.current);
+    }
+
+    return () => observer.disconnect();
+  }, [threshold]);
+
+  return [ref, visible];
+}
+
+function Particles() {
+  const ref = useRef(null);
+
+  useEffect(() => {
+    const canvas = ref.current;
+    if (!canvas) {
+      return undefined;
+    }
+
+    const context = canvas.getContext("2d");
+    let animationFrame = 0;
+
+    const resize = () => {
+      canvas.width = canvas.offsetWidth;
+      canvas.height = canvas.offsetHeight;
+    };
+
+    resize();
+
+    const points = Array.from({ length: 55 }, () => ({
+      x: Math.random() * canvas.width,
+      y: Math.random() * canvas.height,
+      vx: (Math.random() - 0.5) * 0.25,
+      vy: (Math.random() - 0.5) * 0.25,
+      r: Math.random() * 1.2 + 0.4,
+      opacity: Math.random() * 0.4 + 0.1,
+    }));
+
+    const draw = () => {
+      context.clearRect(0, 0, canvas.width, canvas.height);
+
+      points.forEach((point) => {
+        point.x += point.vx;
+        point.y += point.vy;
+
+        if (point.x < 0) point.x = canvas.width;
+        if (point.x > canvas.width) point.x = 0;
+        if (point.y < 0) point.y = canvas.height;
+        if (point.y > canvas.height) point.y = 0;
+
+        context.beginPath();
+        context.arc(point.x, point.y, point.r, 0, Math.PI * 2);
+        context.fillStyle = `rgba(0,255,200,${point.opacity})`;
+        context.fill();
+      });
+
+      for (let index = 0; index < points.length; index += 1) {
+        for (let inner = index + 1; inner < points.length; inner += 1) {
+          const a = points[index];
+          const b = points[inner];
+          const distance = Math.hypot(a.x - b.x, a.y - b.y);
+
+          if (distance < 90) {
+            context.beginPath();
+            context.moveTo(a.x, a.y);
+            context.lineTo(b.x, b.y);
+            context.strokeStyle = `rgba(0,255,200,${0.08 * (1 - distance / 90)})`;
+            context.lineWidth = 1;
+            context.stroke();
+          }
+        }
+      }
+
+      animationFrame = requestAnimationFrame(draw);
+    };
+
+    draw();
+    window.addEventListener("resize", resize);
+
+    return () => {
+      cancelAnimationFrame(animationFrame);
+      window.removeEventListener("resize", resize);
+    };
+  }, []);
+
+  return (
+    <canvas
+      ref={ref}
+      style={{ position: "absolute", inset: 0, width: "100%", height: "100%", zIndex: 1 }}
+    />
+  );
+}
+
+function Btn({ children, outline, className, onClick }) {
+  const [hovered, setHovered] = useState(false);
+  const base = {
+    fontFamily: "'Share Tech Mono',monospace",
+    fontSize: 10,
+    letterSpacing: 2,
+    textTransform: "uppercase",
+    padding: "12px 22px",
+    cursor: "pointer",
+    border: "1px solid",
+    transition: "all .25s",
+    background: "transparent",
+  };
+
+  if (outline) {
+    return (
+      <button
+        className={className}
+        onClick={onClick}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        style={{
+          ...base,
+          color: hovered ? "#00ffc8" : "#4a7a72",
+          borderColor: hovered ? "#00ffc8" : "#1a4040",
+          boxShadow: hovered
+            ? "0 0 18px rgba(0,255,200,.35), inset 0 0 18px rgba(0,255,200,.04)"
+            : "none",
+        }}
+      >
+        {children}
+      </button>
+    );
+  }
+
+  return (
+    <button
+      className={className}
+      onClick={onClick}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        ...base,
+        background: hovered ? "#00ffc8" : "#00ddb0",
+        color: "#020d0f",
+        borderColor: hovered ? "#00ffc8" : "#00ddb0",
+        boxShadow: hovered
+          ? "0 0 24px rgba(0,255,200,.7), 0 0 48px rgba(0,255,200,.3)"
+          : "0 0 10px rgba(0,255,200,.2)",
+        fontWeight: 700,
+      }}
+    >
       {children}
     </button>
   );
 }
 
-function MetricCard({ label, value, detail }) {
-  return (
-    <article className="metric-card">
-      <span className="metric-label">{label}</span>
-      <strong className="metric-value">{value}</strong>
-      <span className="metric-detail">{detail}</span>
-    </article>
-  );
-}
-
-function WalletButton({ wallet, onConnect }) {
-  const label = wallet.account ? shortAddress(wallet.account) : "Connect Wallet";
+function FeatCard({ tag, title, desc, extra, delay }) {
+  const [ref, visible] = useReveal();
+  const [hovered, setHovered] = useState(false);
 
   return (
-    <div className="wallet-cluster">
-      <Button
-        variant={wallet.account ? "ghost" : "solid"}
-        onClick={() => {
-          void onConnect();
+    <div
+      ref={ref}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        border: `1px solid ${hovered ? "rgba(0,255,200,.25)" : "rgba(0,255,200,.08)"}`,
+        background: hovered ? "rgba(0,255,200,.03)" : "transparent",
+        padding: "20px",
+        position: "relative",
+        opacity: visible ? 1 : 0,
+        transform: visible ? "translateY(0)" : "translateY(20px)",
+        transition: `opacity .6s ${delay}ms, transform .6s ${delay}ms, border-color .3s, background .3s`,
+        overflow: "hidden",
+      }}
+    >
+      <div
+        style={{
+          position: "absolute",
+          top: 0,
+          left: 0,
+          right: 0,
+          height: 1,
+          background: "linear-gradient(90deg,transparent,#00ffc8,transparent)",
+          opacity: hovered ? 1 : 0,
+          transition: "opacity .3s",
         }}
-        disabled={wallet.connecting}
+      />
+      <div
+        style={{
+          fontFamily: "'Share Tech Mono',monospace",
+          fontSize: 9,
+          color: "#2a5550",
+          letterSpacing: 2,
+          marginBottom: 12,
+        }}
       >
-        {wallet.connecting ? "Connecting..." : label}
-      </Button>
-      <span className="wallet-meta">
-        {wallet.account
-          ? wallet.chainId
-            ? `Chain ${wallet.chainId}`
-            : "Wallet ready"
-          : "Browser wallet required"}
-      </span>
+        {tag}
+      </div>
+      <h3
+        style={{
+          fontFamily: "'Share Tech Mono',monospace",
+          fontSize: 11,
+          color: "#e0f0ed",
+          letterSpacing: 1,
+          marginBottom: 10,
+          lineHeight: 1.5,
+        }}
+      >
+        {title}
+      </h3>
+      <p
+        style={{
+          fontFamily: "'Share Tech Mono',monospace",
+          fontSize: 9,
+          color: "#3a6660",
+          lineHeight: 1.8,
+          marginBottom: 14,
+        }}
+      >
+        {desc}
+      </p>
+      {extra ? (
+        <div style={{ fontFamily: "'Share Tech Mono',monospace", fontSize: 9, color: "#2a5550" }}>
+          {extra}
+        </div>
+      ) : null}
+      <div style={{ marginTop: 16, height: 1, background: "rgba(0,255,200,.06)" }}>
+        <div
+          style={{
+            height: "100%",
+            width: "55%",
+            background: "linear-gradient(90deg,#00ffc8,transparent)",
+          }}
+        />
+      </div>
     </div>
   );
 }
 
-function Navigation({ route, onNavigate, wallet, onConnect }) {
-  return (
-    <header className="topbar">
-      <div
-        className="brand-block"
-        onClick={() => onNavigate("home")}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" || event.key === " ") {
-            event.preventDefault();
-            onNavigate("home");
-          }
-        }}
-        role="button"
-        tabIndex={0}
-      >
-        <span className="brand-kicker">Privacy-first rewards</span>
-        <span className="brand-title">ZUS_PROTOCOL</span>
-      </div>
+function HowStep({ dot, title, desc, delay }) {
+  const [ref, visible] = useReveal();
 
-      <nav className="topnav">
-        <button
-          className={`nav-link ${route === "home" ? "is-active" : ""}`}
-          onClick={() => onNavigate("home")}
-          type="button"
+  return (
+    <div
+      className="how-step"
+      ref={ref}
+      style={{
+        display: "flex",
+        gap: 16,
+        alignItems: "flex-start",
+        padding: "20px 24px",
+        border: "1px solid rgba(0,255,200,.07)",
+        opacity: visible ? 1 : 0,
+        transform: visible ? "translateX(0)" : "translateX(-20px)",
+        transition: `opacity .6s ${delay}ms, transform .6s ${delay}ms`,
+      }}
+    >
+      <div
+        style={{
+          width: 32,
+          height: 32,
+          flexShrink: 0,
+          background: "rgba(0,255,200,.08)",
+          border: "1px solid rgba(0,255,200,.2)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          fontFamily: "'Share Tech Mono',monospace",
+          fontSize: 11,
+          color: "#00ddb0",
+        }}
+      >
+        {dot}
+      </div>
+      <div>
+        <div
+          style={{
+            fontFamily: "'Share Tech Mono',monospace",
+            fontSize: 11,
+            color: "#cce8e4",
+            letterSpacing: 1,
+            marginBottom: 6,
+          }}
         >
-          Home
-        </button>
-        <button
-          className={`nav-link ${route === "campaigns" ? "is-active" : ""}`}
-          onClick={() => onNavigate("campaigns")}
-          type="button"
+          {title}
+        </div>
+        <div
+          style={{
+            fontFamily: "'Share Tech Mono',monospace",
+            fontSize: 9,
+            color: "#3a6660",
+            lineHeight: 1.8,
+          }}
         >
-          Campaigns
-        </button>
+          {desc}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function UseCard({ title, desc, delay }) {
+  const [ref, visible] = useReveal(0.1);
+  const [hovered, setHovered] = useState(false);
+
+  return (
+    <div
+      ref={ref}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        border: `1px solid ${hovered ? "rgba(0,255,200,.2)" : "rgba(0,255,200,.07)"}`,
+        background: hovered ? "rgba(0,255,200,.02)" : "transparent",
+        padding: "20px",
+        opacity: visible ? 1 : 0,
+        transform: visible ? "translateY(0)" : "translateY(16px)",
+        transition: `opacity .5s ${delay}ms, transform .5s ${delay}ms, border-color .3s`,
+      }}
+    >
+      <div
+        style={{
+          fontFamily: "'Share Tech Mono',monospace",
+          fontSize: 10,
+          color: "#00ddb0",
+          letterSpacing: 1.5,
+          marginBottom: 8,
+        }}
+      >
+        {title}
+      </div>
+      <div
+        style={{
+          fontFamily: "'Share Tech Mono',monospace",
+          fontSize: 9,
+          color: "#3a6660",
+          lineHeight: 1.8,
+        }}
+      >
+        {desc}
+      </div>
+    </div>
+  );
+}
+
+function LandingPage({ onNavigateStart, wallet, onConnect, campaigns, campaignsLoading, campaignsError }) {
+  const [scrolled, setScrolled] = useState(false);
+
+  useEffect(() => {
+    const handleScroll = () => setScrolled(window.scrollY > 30);
+    window.addEventListener("scroll", handleScroll);
+    return () => window.removeEventListener("scroll", handleScroll);
+  }, []);
+
+  return (
+    <>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+        ::-webkit-scrollbar { width: 3px; }
+        ::-webkit-scrollbar-track { background: #020d0f; }
+        ::-webkit-scrollbar-thumb { background: #00806a; }
+        body { background: #020d0f; margin: 0; overflow-x: hidden; }
+        @keyframes cur { 0%,100%{opacity:1} 50%{opacity:0} }
+        @keyframes glitch {
+          0%   { clip-path:inset(20% 0 60% 0); transform:translate(-2px,0); }
+          33%  { clip-path:inset(60% 0 10% 0); transform:translate(2px,0); filter:hue-rotate(20deg); }
+          66%  { clip-path:inset(40% 0 40% 0); transform:translate(-1px,0); }
+          100% { clip-path:none; transform:translate(0); }
+        }
+        @keyframes fadeUp { from{opacity:0;transform:translateY(18px)} to{opacity:1;transform:translateY(0)} }
+        @keyframes glowPulse {
+          0%,100% { text-shadow: 0 0 28px rgba(0,255,200,.5),0 0 56px rgba(0,255,200,.2); }
+          50%     { text-shadow: 0 0 48px rgba(0,255,200,.85),0 0 90px rgba(0,255,200,.4),0 0 130px rgba(0,255,200,.1); }
+        }
+        button { outline: none; }
+        @media (max-width: 900px) {
+          .top-nav { padding: 14px 20px !important; }
+          .nav-actions { gap: 12px !important; }
+          .nav-cta { padding: 10px 16px !important; }
+          .content-section, .use-cases-section { padding: 72px 24px !important; }
+          .site-footer { padding: 20px 24px !important; }
+        }
+        @media (max-width: 680px) {
+          .top-nav {
+            flex-direction: column !important;
+            align-items: flex-start !important;
+            gap: 14px !important;
+            padding: 14px 16px !important;
+          }
+          .nav-brand {
+            font-size: 11px !important;
+            letter-spacing: 2px !important;
+          }
+          .nav-actions {
+            width: 100% !important;
+            justify-content: space-between !important;
+            gap: 10px !important;
+            flex-wrap: wrap !important;
+          }
+          .nav-link {
+            font-size: 8px !important;
+            letter-spacing: 1.5px !important;
+          }
+          .nav-cta, .hero-btn {
+            width: 100% !important;
+            justify-content: center !important;
+            text-align: center !important;
+          }
+          .hero-section {
+            min-height: auto !important;
+            padding: 164px 16px 72px !important;
+          }
+          .hero-content {
+            width: 100% !important;
+            max-width: 520px !important;
+          }
+          .hero-eyebrow {
+            width: 100% !important;
+            max-width: 320px !important;
+            font-size: 8px !important;
+            letter-spacing: 2px !important;
+            padding: 6px 10px !important;
+          }
+          .hero-title {
+            font-size: clamp(36px, 17vw, 62px) !important;
+            letter-spacing: 1px !important;
+            line-height: 1.02 !important;
+          }
+          .typewriter-sub {
+            max-width: none !important;
+            width: 100% !important;
+            min-height: 96px !important;
+            font-size: 10px !important;
+            margin: 20px auto 28px !important;
+            line-height: 1.85 !important;
+          }
+          .hero-actions {
+            flex-direction: column !important;
+            gap: 10px !important;
+            align-items: stretch !important;
+          }
+          .content-section, .use-cases-section, .ledger-section {
+            padding-left: 16px !important;
+            padding-right: 16px !important;
+          }
+          .feature-grid, .use-cases-grid {
+            grid-template-columns: 1fr !important;
+          }
+          .how-step {
+            flex-direction: column !important;
+            gap: 12px !important;
+            padding: 18px !important;
+          }
+          .ledger-copy { line-height: 1.85 !important; }
+          .desktop-break { display: none !important; }
+          .site-footer {
+            flex-direction: column !important;
+            gap: 16px !important;
+            text-align: center !important;
+            padding: 20px 16px 28px !important;
+          }
+          .footer-brand { justify-content: center !important; }
+          .footer-copy, .footer-links { text-align: center !important; }
+        }
+      `}</style>
+
+      <nav
+        className="top-nav"
+        style={{
+          position: "fixed",
+          top: 0,
+          left: 0,
+          right: 0,
+          zIndex: 100,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          padding: "14px 40px",
+          background: scrolled ? "rgba(2,13,15,.92)" : "transparent",
+          backdropFilter: scrolled ? "blur(12px)" : "none",
+          borderBottom: scrolled
+            ? "1px solid rgba(0,255,200,.08)"
+            : "1px solid transparent",
+          transition: "all .4s",
+        }}
+      >
+        <span
+          className="nav-brand"
+          style={{
+            fontFamily: "'Share Tech Mono',monospace",
+            fontSize: 12,
+            color: "#00ffc8",
+            letterSpacing: 3,
+            textShadow: "0 0 14px rgba(0,255,200,.5)",
+          }}
+        >
+          ZUS_PROTOCOL
+        </span>
+        <div className="nav-actions" style={{ display: "flex", gap: 14, alignItems: "center" }}>
+          {["PRINCIPLES", "FEATURES"].map((item) => (
+            <a
+              className="nav-link"
+              key={item}
+              href="#"
+              style={{
+                fontFamily: "'Share Tech Mono',monospace",
+                fontSize: 9,
+                color: "#3a6660",
+                letterSpacing: 2,
+                textDecoration: "none",
+                transition: "color .2s",
+              }}
+              onMouseEnter={(event) => {
+                event.target.style.color = "#00ffc8";
+              }}
+              onMouseLeave={(event) => {
+                event.target.style.color = "#3a6660";
+              }}
+            >
+              {item}
+            </a>
+          ))}
+          <Btn className="nav-cta" outline onClick={() => void onConnect()}>
+            {wallet.account ? shortAddress(wallet.account) : "CONNECT WALLET"}
+          </Btn>
+          <Btn className="nav-cta" onClick={onNavigateStart}>
+            LAUNCH APP
+          </Btn>
+        </div>
       </nav>
 
-      <WalletButton wallet={wallet} onConnect={onConnect} />
-    </header>
-  );
-}
-
-function SectionHeader({ eyebrow, title, body }) {
-  return (
-    <div className="section-header">
-      <span className="section-eyebrow">{eyebrow}</span>
-      <h2>{title}</h2>
-      <p>{body}</p>
-    </div>
-  );
-}
-
-function StatusPanel({
-  wallet,
-  campaignCount,
-  creatorCount,
-  totalRecipients,
-  pendingDeployment,
-  createState,
-  onNavigate,
-}) {
-  const explorerUrl = makeExplorerUrl(createState.txHash);
-
-  return (
-    <aside className="panel status-panel">
-      <SectionHeader
-        eyebrow="App status"
-        title="Ready for the Rust API and the contract"
-        body="Get Started jumps into the live campaign feed, and the create flow stores the Merkle campaign offchain before asking your wallet to deploy the matching onchain campaign."
-      />
-
-      <div className="status-grid">
-        <MetricCard
-          label="Campaigns"
-          value={campaignCount.toLocaleString()}
-          detail="Loaded from GET /campaigns"
+      <section
+        className="hero-section"
+        style={{
+          position: "relative",
+          minHeight: "100vh",
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          textAlign: "center",
+          padding: "120px 24px 80px",
+          overflow: "hidden",
+        }}
+      >
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            zIndex: 0,
+            background:
+              "radial-gradient(ellipse 65% 45% at 50% 35%, rgba(0,255,200,.055) 0%, transparent 70%), radial-gradient(ellipse 35% 25% at 15% 85%, rgba(0,180,140,.03) 0%, transparent 60%), radial-gradient(ellipse 35% 25% at 85% 70%, rgba(0,100,80,.03) 0%, transparent 60%)",
+          }}
         />
-        <MetricCard
-          label="Creators"
-          value={creatorCount.toLocaleString()}
-          detail="Unique wallet creators in the API"
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            zIndex: 0,
+            backgroundImage:
+              "linear-gradient(rgba(0,255,200,.02) 1px,transparent 1px),linear-gradient(90deg,rgba(0,255,200,.02) 1px,transparent 1px)",
+            backgroundSize: "55px 55px",
+            maskImage: "radial-gradient(ellipse at center, black 25%, transparent 75%)",
+          }}
         />
-        <MetricCard
-          label="Recipients"
-          value={totalRecipients.toLocaleString()}
-          detail="Summed from Rust API leaf counts"
-        />
-      </div>
+        <Particles />
 
-      <div className="callout">
-        <span className="callout-label">Wallet</span>
-        <strong>{wallet.account ? shortAddress(wallet.account) : "Connect before creating"}</strong>
-        <p>
-          {wallet.account
-            ? "The connected wallet becomes the API campaign creator and signs the contract deployment."
-            : "Reading campaigns does not need a wallet, but create campaign does."}
-        </p>
-      </div>
+        <div className="hero-content" style={{ position: "relative", zIndex: 2 }}>
+          <div
+            className="hero-eyebrow"
+            style={{
+              fontFamily: "'Share Tech Mono',monospace",
+              fontSize: 9,
+              letterSpacing: 3,
+              color: "#00ddb0",
+              border: "1px solid rgba(0,255,200,.22)",
+              display: "inline-block",
+              padding: "4px 14px",
+              marginBottom: 28,
+              animation: "fadeUp .8s .2s both",
+            }}
+          >
+            PRIVACY-PRESERVING PROTOCOL
+          </div>
 
-      <div className="callout">
-        <span className="callout-label">Environment</span>
-        <strong>{appConfig.apiBaseUrl}</strong>
-        <p>
-          RPC: {appConfig.rpcUrl || "missing"} | Protocol:{" "}
-          {appConfig.protocolAddress || "missing"}
-        </p>
-      </div>
-
-      {pendingDeployment ? (
-        <div className="callout warning">
-          <span className="callout-label">Pending onchain step</span>
-          <strong>{pendingDeployment.apiCampaign.name}</strong>
-          <p>
-            Rust API campaign <code>{pendingDeployment.apiCampaign.campaign_id}</code> already
-            exists. Finish the wallet transaction to avoid creating a duplicate API campaign.
-          </p>
-          <Button variant="ghost" onClick={() => onNavigate("campaigns")}>
-            Finish Deployment
-          </Button>
-        </div>
-      ) : null}
-
-      {createState.success ? (
-        <div className="flash success">
-          <strong>{createState.success}</strong>
-          {createState.apiCampaign ? (
-            <p>
-              API campaign: <code>{createState.apiCampaign.campaign_id}</code>
-            </p>
-          ) : null}
-          {createState.txHash ? (
-            explorerUrl ? (
-              <a href={explorerUrl} target="_blank" rel="noreferrer">
-                View transaction {shortHash(createState.txHash)}
-              </a>
-            ) : (
-              <p>Transaction {shortHash(createState.txHash)}</p>
-            )
-          ) : null}
-        </div>
-      ) : null}
-
-      {createState.error ? (
-        <div className="flash error">
-          <strong>Create flow needs attention</strong>
-          <p>{createState.error}</p>
-        </div>
-      ) : null}
-    </aside>
-  );
-}
-
-function CampaignCard({ campaign }) {
-  return (
-    <article className="campaign-card">
-      <div className="campaign-card-top">
-        <span className="campaign-tag">Campaign</span>
-        <span className="campaign-id">{campaign.campaign_id}</span>
-      </div>
-      <h3>{campaign.name}</h3>
-      <dl>
-        <div>
-          <dt>Creator</dt>
-          <dd>{campaign.campaign_creator_address}</dd>
-        </div>
-        <div>
-          <dt>Recipients</dt>
-          <dd>{campaign.leaf_count.toLocaleString()}</dd>
-        </div>
-        <div>
-          <dt>Onchain ID</dt>
-          <dd>{campaign.onchain_campaign_id}</dd>
-        </div>
-        <div>
-          <dt>Merkle root</dt>
-          <dd>{campaign.merkle_root}</dd>
-        </div>
-      </dl>
-    </article>
-  );
-}
-
-function HomePage({ campaigns, wallet, onConnect, onNavigate }) {
-  return (
-    <main className="page-shell">
-      <section className="hero">
-        <div className="hero-copy">
-          <span className="hero-kicker">Zero-knowledge reward operations</span>
-          <h1>
-            Rewards without public recipient leakage.
-          </h1>
-          <p>
-            The frontend now points at the Rust campaign API by environment variable, shows the
-            live campaign feed, and asks the connected wallet to create the matching onchain
-            campaign through the Zus protocol contract.
-          </p>
-          <div className="hero-actions">
-            <Button onClick={() => onNavigate("campaigns")}>Get Started</Button>
-            <Button
-              variant="ghost"
-              onClick={() => {
-                void onConnect();
+          <h1
+            className="hero-title"
+            style={{
+              fontFamily: "'Share Tech Mono',monospace",
+              fontSize: "clamp(46px,8vw,104px)",
+              fontWeight: 400,
+              lineHeight: 0.96,
+              letterSpacing: 2,
+              animation: "fadeUp .9s .4s both",
+            }}
+          >
+            <Glitch color="#ffffff">REWARDS_</Glitch>
+            <br />
+            <span style={{ color: "#ffffff" }}>WITHOUT</span>
+            <br />
+            <span
+              style={{
+                color: "#00ffc8",
+                display: "inline-block",
+                animation: "glowPulse 3s 1.4s ease-in-out infinite",
               }}
             >
-              {wallet.account ? "Wallet Connected" : "Connect Wallet"}
-            </Button>
-          </div>
-          <div className="hero-note">
-            API: <code>{appConfig.apiBaseUrl}</code> | RPC:{" "}
-            <code>{appConfig.rpcUrl || "set VITE_RPC_URL"}</code>
-          </div>
-        </div>
-
-        <div className="hero-panel panel">
-          <SectionHeader
-            eyebrow="Live preview"
-            title="Latest campaigns from the Rust service"
-            body="These are loaded from the same API endpoint the dashboard uses, so the Get Started flow takes you into a real dataset instead of a hard-coded mock."
-          />
-          <div className="hero-campaigns">
-            {campaigns.slice(0, 3).map((campaign) => (
-              <div key={campaign.campaign_id} className="mini-campaign">
-                <strong>{campaign.name}</strong>
-                <span>{campaign.leaf_count} recipients</span>
-                <code>{shortAddress(campaign.campaign_creator_address)}</code>
-              </div>
-            ))}
-            {campaigns.length === 0 ? (
-              <div className="mini-campaign empty">
-                <strong>No campaigns yet</strong>
-                <span>Once the Rust API has data, it will appear here and in the dashboard.</span>
-              </div>
-            ) : null}
-          </div>
-        </div>
-      </section>
-
-      <section className="feature-band">
-        <article className="feature-card">
-          <span>Step 1</span>
-          <h3>Create in Rust API</h3>
-          <p>
-            The browser sends the campaign name, creator address, and recipient matrix to the Axum
-            service at <code>/campaigns</code>.
-          </p>
-        </article>
-        <article className="feature-card">
-          <span>Step 2</span>
-          <h3>Deploy onchain</h3>
-          <p>
-            Using the wallet plus env-configured RPC, the app calls
-            <code> createCampaign(bytes32,address,bytes32,bytes8,uint256)</code>.
-          </p>
-        </article>
-        <article className="feature-card">
-          <span>Step 3</span>
-          <h3>Read everything back</h3>
-          <p>
-            The campaigns page refreshes from the Rust API so operators can verify the offchain and
-            onchain identifiers line up.
-          </p>
-        </article>
-      </section>
-    </main>
-  );
-}
-
-function CampaignsPage({
-  campaigns,
-  campaignsLoading,
-  campaignsError,
-  form,
-  wallet,
-  createState,
-  pendingDeployment,
-  onFormChange,
-  onRecipientChange,
-  onAddRecipient,
-  onRemoveRecipient,
-  onSubmitCreate,
-  onRefresh,
-}) {
-  return (
-    <main className="page-shell campaigns-page">
-      <section className="dashboard-header">
-        <div>
-          <span className="section-eyebrow">Get Started</span>
-          <h1>Campaign operator dashboard</h1>
-          <p>
-            All campaigns below come from the Rust API configured by <code>VITE_API_BASE_URL</code>
-            . Creating a campaign first persists the Merkle data in Rust, then deploys the matching
-            onchain campaign through the connected wallet.
-          </p>
-        </div>
-        <div className="dashboard-actions">
-          <Button variant="ghost" onClick={onRefresh} disabled={campaignsLoading}>
-            {campaignsLoading ? "Refreshing..." : "Refresh Campaigns"}
-          </Button>
-        </div>
-      </section>
-
-      <section className="dashboard-grid">
-        <article className="panel form-panel">
-          <SectionHeader
-            eyebrow="Create campaign"
-            title="API first, contract second"
-            body="Use human-readable AVAX amounts for payout and funding. Recipient rows map directly to the Rust API payload."
-          />
-
-          <div className="form-grid">
-            <label className="field">
-              <span>Campaign name</span>
-              <input
-                value={form.name}
-                onChange={(event) => onFormChange("name", event.target.value)}
-                placeholder="Fuji community drop"
-              />
-            </label>
-
-            <label className="field">
-              <span>Creator wallet</span>
-              <input value={wallet.account || ""} placeholder="Connect wallet" readOnly />
-            </label>
-
-            <label className="field">
-              <span>Payout amount (AVAX)</span>
-              <input
-                value={form.payoutAmount}
-                onChange={(event) => onFormChange("payoutAmount", event.target.value)}
-                inputMode="decimal"
-                placeholder="0.1"
-              />
-            </label>
-
-            <label className="field">
-              <span>Funding amount (AVAX)</span>
-              <input
-                value={form.fundingAmount}
-                onChange={(event) => onFormChange("fundingAmount", event.target.value)}
-                inputMode="decimal"
-                placeholder="1.0"
-              />
-            </label>
-          </div>
-
-          <div className="recipient-header">
-            <div>
-              <span className="section-eyebrow">Recipients</span>
-              <p>At least one address and integer amount are required.</p>
-            </div>
-            <Button variant="ghost" onClick={onAddRecipient}>
-              Add row
-            </Button>
-          </div>
-
-          <div className="recipient-list">
-            {form.recipients.map((recipient, index) => (
-              <div className="recipient-row" key={`recipient-${index}`}>
-                <label className="field">
-                  <span>Wallet {index + 1}</span>
-                  <input
-                    value={recipient.leaf_address}
-                    onChange={(event) =>
-                      onRecipientChange(index, "leaf_address", event.target.value)
-                    }
-                    placeholder="0x..."
-                  />
-                </label>
-                <label className="field">
-                  <span>Amount</span>
-                  <input
-                    value={recipient.amount}
-                    onChange={(event) => onRecipientChange(index, "amount", event.target.value)}
-                    inputMode="numeric"
-                    placeholder="1"
-                  />
-                </label>
-                <Button
-                  variant="ghost"
-                  className="remove-row"
-                  onClick={() => onRemoveRecipient(index)}
-                  disabled={form.recipients.length === 1}
-                >
-                  Remove
-                </Button>
-              </div>
-            ))}
-          </div>
-
-          <div className="form-note">
-            <strong>Configured contract message:</strong> <code>{appConfig.campaignMessage}</code>
-            <br />
-            <strong>Protocol contract:</strong> <code>{appConfig.protocolAddress || "missing"}</code>
-            <br />
-            <strong>Verifier:</strong> <code>{appConfig.verifierAddress || "missing"}</code>
-          </div>
-
-          <div className="form-actions">
-            <Button
-              onClick={() => {
-                void onSubmitCreate();
-              }}
-              disabled={createState.loading}
-            >
-              {createState.loading
-                ? "Working..."
-                : pendingDeployment
-                  ? "Complete Onchain Deployment"
-                  : "Create Campaign"}
-            </Button>
-            <span className="muted-copy">
-              {pendingDeployment
-                ? "The Rust API step already succeeded. This resumes the wallet transaction only."
-                : "This will POST to the Rust API and then open the wallet transaction."}
+              <Glitch color="#00ffc8">EXPOSURE_</Glitch>
             </span>
+          </h1>
+
+          <TypewriterSub />
+
+          <div
+            className="hero-actions"
+            style={{
+              display: "flex",
+              gap: 14,
+              justifyContent: "center",
+              flexWrap: "wrap",
+              animation: "fadeUp .9s .8s both",
+            }}
+          >
+            <Btn className="hero-btn" outline onClick={() => void onConnect()}>
+              {wallet.account ? shortAddress(wallet.account) : "CONNECT WALLET"}
+            </Btn>
+            <Btn className="hero-btn" onClick={onNavigateStart}>
+              GET STARTED
+            </Btn>
           </div>
-        </article>
 
-        <article className="panel campaign-feed">
-          <SectionHeader
-            eyebrow="All campaigns"
-            title="Live Rust API feed"
-            body="This list is driven by GET /campaigns so the frontend stays in sync with the backend campaign catalog."
-          />
-
-          {campaignsError ? (
-            <div className="flash error">
-              <strong>Could not load campaigns</strong>
-              <p>{campaignsError}</p>
-            </div>
-          ) : null}
-
-          {campaignsLoading ? <div className="loading-state">Loading campaigns...</div> : null}
-
-          {!campaignsLoading && campaigns.length === 0 ? (
-            <div className="empty-state">
-              <strong>No campaigns returned yet.</strong>
-              <p>Create one above and it will appear here after the Rust API responds.</p>
-            </div>
-          ) : null}
-
-          <div className="campaign-list">
-            {campaigns.map((campaign) => (
-              <CampaignCard campaign={campaign} key={campaign.campaign_id} />
-            ))}
-          </div>
-        </article>
+        </div>
       </section>
-    </main>
+
+      <section className="content-section" style={{ padding: "90px 48px", maxWidth: 1100, margin: "0 auto" }}>
+        <div style={{ fontFamily: "'Share Tech Mono',monospace", fontSize: 9, color: "#2a5550", letterSpacing: 2, marginBottom: 10 }}>
+          ZRC_LAYER_LINE: 001
+        </div>
+        <h2 style={{ fontFamily: "'Share Tech Mono',monospace", fontSize: "clamp(20px,3.5vw,40px)", color: "#cce8e4", letterSpacing: 3, marginBottom: 8 }}>
+          ENCRYPTED BY DESIGN.
+        </h2>
+        <p style={{ fontFamily: "'Share Tech Mono',monospace", fontSize: 9, color: "#3a6660", marginBottom: 40, lineHeight: 1.8 }}>
+          Powered by ZK proofs, a Rust campaign API, and private transactions that keep the recipient graph off the public surface area.
+        </p>
+        <div className="feature-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(260px,1fr))", gap: 16 }}>
+          <FeatCard tag="// CONFIDENTIAL_AIRDROP" title="DROP TO THE RIGHT WALLETS. TELL NO ONE ELSE." desc="Distribute tokens to verified holders without exposing the recipient list or individual balances." extra="+ LIVE CAMPAIGNS >" delay={0} />
+          <FeatCard tag="// RUST_API_SYNC" title="GET STARTED NOW OPENS ACTIVE REWARDS." desc="The landing page routes into the rewards surface first, while the other pages stay available through the same app shell and original design language." delay={120} />
+          <FeatCard tag="// SMART_CONTRACT_HANDOFF" title="CREATE OFFCHAIN FIRST, DEPLOY ONCHAIN SECOND." desc="The app creates the Merkle campaign in Rust first, then asks the connected wallet to call the ZusProtocol contract with the returned root and onchain id." extra="RPC + CONTRACT VIA ENV" delay={240} />
+        </div>
+      </section>
+
+      <section className="content-section" style={{ padding: "90px 48px", maxWidth: 1100, margin: "0 auto" }}>
+        <div style={{ fontFamily: "'Share Tech Mono',monospace", fontSize: 9, color: "#2a5550", letterSpacing: 2, marginBottom: 10 }}>ZRC_LAYER_LINE: 002</div>
+        <h2 style={{ fontFamily: "'Share Tech Mono',monospace", fontSize: "clamp(20px,3.5vw,40px)", color: "#cce8e4", letterSpacing: 3, marginBottom: 4 }}>
+          HOW <span style={{ color: "#00ffc8", textShadow: "0 0 16px rgba(0,255,200,.4)" }}>ZUS</span> WORKS
+        </h2>
+        <div style={{ width: 36, height: 2, background: "#00ffc8", margin: "10px 0 40px", boxShadow: "0 0 8px #00ffc8" }} />
+        <div style={{ display: "flex", flexDirection: "column", gap: 16, maxWidth: 640 }}>
+          <HowStep dot="1" title="CONNECT WALLET" desc="The operator wallet stays in the existing interface, but now it actually connects and becomes the campaign creator address sent to the Rust API." delay={0} />
+          <HowStep dot="2" title="CREATE CAMPAIGN" desc="The dashboard posts name plus recipients to /campaigns, gets back merkle_root and onchain_campaign_id, then forwards those values into the contract call." delay={150} />
+          <HowStep dot="3" title="VERIFY THE RESULT" desc="Every campaign in the operator stream is rendered from the Rust API feed so the UI mirrors the backend catalog instead of static placeholders." delay={300} />
+        </div>
+      </section>
+
+      <section className="content-section use-cases-section" style={{ padding: "90px 48px", textAlign: "center", position: "relative", overflow: "hidden" }}>
+        <div style={{ position: "absolute", inset: 0, background: "radial-gradient(ellipse 70% 60% at 50% 50%, rgba(0,255,200,.02) 0%, transparent 70%)", pointerEvents: "none" }} />
+        <div style={{ maxWidth: 1100, margin: "0 auto", position: "relative", zIndex: 1 }}>
+          <div style={{ fontFamily: "'Share Tech Mono',monospace", fontSize: 9, color: "#2a5550", letterSpacing: 2, marginBottom: 10 }}>ZRC_LAYER_LINE: 003</div>
+          <h2 style={{ fontFamily: "'Share Tech Mono',monospace", fontSize: "clamp(20px,3.5vw,40px)", color: "#cce8e4", letterSpacing: 4, marginBottom: 48 }}>
+            OPERATIONAL USE CASES
+          </h2>
+          <div className="use-cases-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, maxWidth: 700, margin: "0 auto" }}>
+            <UseCard title="PRIVATE AIRDROPS" desc="Store allowlists offchain in Rust and only push the campaign root plus payout logic onchain." delay={0} />
+            <UseCard title="LOYALTY CAMPAIGNS" desc="Run repeated reward drops while keeping the public dashboard free of full recipient disclosure." delay={100} />
+            <UseCard title="GATED REBATES" desc="Use the same flow for consumer cashback or merchant promotions with a creator-controlled contract deployment." delay={200} />
+            <UseCard title="STEALTH CLAIM SYSTEMS" desc="Keep the original stealth-address and proof path design while giving operators a real browser-based control panel." delay={300} />
+          </div>
+        </div>
+      </section>
+
+      <section className="ledger-section" style={{ padding: "120px 24px", textAlign: "center", position: "relative", overflow: "hidden" }}>
+        <div style={{ position: "absolute", inset: 0, background: "radial-gradient(ellipse 55% 40% at 50% 50%, rgba(0,255,200,.035) 0%, transparent 70%)", pointerEvents: "none" }} />
+        <div style={{ maxWidth: 600, margin: "0 auto", position: "relative", zIndex: 1 }}>
+          <div style={{ fontFamily: "'Share Tech Mono',monospace", fontSize: 9, color: "#2a5550", letterSpacing: 2, marginBottom: 16 }}>ZRC_LAYER_LINE: 004</div>
+          <h2 style={{ fontFamily: "'Share Tech Mono',monospace", fontSize: "clamp(30px,6vw,68px)", color: "#cce8e4", letterSpacing: 3, lineHeight: 1.05, marginBottom: 20 }}>
+            THE LEDGER OF
+            <br />
+            SHADOWS.
+          </h2>
+          <p className="ledger-copy" style={{ fontFamily: "'Share Tech Mono',monospace", fontSize: 9, color: "#3a6660", lineHeight: 2, marginBottom: 36 }}>
+            Start distributing rewards that respect the right to
+            <br className="desktop-break" />
+            privacy. Open the operator view, inspect the live Rust campaign
+            <br className="desktop-break" />
+            stream, and deploy the next drop from the same interface.
+          </p>
+          <Btn className="hero-btn" outline onClick={onNavigateStart}>
+            CREATE CAMPAIGN
+          </Btn>
+        </div>
+      </section>
+
+      <footer
+        className="site-footer"
+        style={{
+          borderTop: "1px solid rgba(0,255,200,.06)",
+          padding: "20px 40px",
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          fontFamily: "'Share Tech Mono',monospace",
+          fontSize: 9,
+          color: "#2a5550",
+          letterSpacing: 1,
+        }}
+      >
+        <div className="footer-brand" style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span style={{ color: "#00ffc8" }}>ZUS_PROTOCOL</span>
+          <PixelCat />
+        </div>
+        <div className="footer-copy" style={{ textAlign: "center", lineHeight: 1.8 }}>
+          <div>© 2026 ZUS PROTOCOL. ALL RIGHTS RESERVED.</div>
+          <div style={{ color: "#1a5550" }}>CONNECTED: {shortAddress(wallet.account)}</div>
+        </div>
+        <span className="footer-links">X_FEED · DISCORD_SERVER · GITHUB_REPO · PRIVACY_POLICY</span>
+      </footer>
+    </>
   );
 }
 
@@ -640,33 +1002,17 @@ export default function App() {
     connecting: false,
     error: "",
   });
+  const [selectedCampaignId, setSelectedCampaignId] = useState(getSelectedCampaignId);
   const [campaigns, setCampaigns] = useState([]);
-  const [campaignsLoading, setCampaignsLoading] = useState(true);
+  const [campaignsLoading, setCampaignsLoading] = useState(false);
   const [campaignsError, setCampaignsError] = useState("");
-  const [refreshNonce, setRefreshNonce] = useState(0);
-  const [form, setForm] = useState({
-    name: "",
-    payoutAmount: appConfig.defaultPayoutAmount,
-    fundingAmount: appConfig.defaultFundingAmount,
-    recipients: [{ ...EMPTY_RECIPIENT }],
-  });
-  const [pendingDeployment, setPendingDeployment] = useState(null);
-  const [createState, setCreateState] = useState({
-    loading: false,
-    error: "",
-    success: "",
-    txHash: "",
-    apiCampaign: null,
-  });
 
   useEffect(() => {
-    if (typeof window === "undefined") {
-      return undefined;
-    }
-
-    const handleHashChange = () => setRoute(getCurrentRoute());
+    const handleHashChange = () => {
+      setRoute(getCurrentRoute());
+      setSelectedCampaignId(getSelectedCampaignId());
+    };
     window.addEventListener("hashchange", handleHashChange);
-
     return () => window.removeEventListener("hashchange", handleHashChange);
   }, []);
 
@@ -674,36 +1020,6 @@ export default function App() {
     if (!window.ethereum?.request) {
       return undefined;
     }
-
-    let cancelled = false;
-
-    const syncWallet = async () => {
-      try {
-        const accounts = await window.ethereum.request({ method: "eth_accounts" });
-        const chainIdHex = await window.ethereum.request({ method: "eth_chainId" });
-        if (cancelled) {
-          return;
-        }
-
-        setWallet((current) => ({
-          ...current,
-          account: accounts?.[0] || "",
-          chainId: chainIdHex ? Number.parseInt(chainIdHex, 16).toString() : "",
-          error: "",
-        }));
-      } catch (error) {
-        if (cancelled) {
-          return;
-        }
-
-        setWallet((current) => ({
-          ...current,
-          error: parseErrorMessage(error),
-        }));
-      }
-    };
-
-    syncWallet();
 
     const handleAccountsChanged = (accounts) => {
       setWallet((current) => ({
@@ -724,7 +1040,6 @@ export default function App() {
     window.ethereum.on?.("chainChanged", handleChainChanged);
 
     return () => {
-      cancelled = true;
       window.ethereum.removeListener?.("accountsChanged", handleAccountsChanged);
       window.ethereum.removeListener?.("chainChanged", handleChainChanged);
     };
@@ -739,17 +1054,13 @@ export default function App() {
 
       try {
         const data = await readJson(await fetch(resolveApiUrl("/campaigns")));
-        if (cancelled) {
-          return;
+        if (!cancelled) {
+          setCampaigns(Array.isArray(data) ? data : []);
         }
-
-        setCampaigns(Array.isArray(data) ? data : []);
       } catch (error) {
-        if (cancelled) {
-          return;
+        if (!cancelled) {
+          setCampaignsError(parseErrorMessage(error));
         }
-
-        setCampaignsError(parseErrorMessage(error));
       } finally {
         if (!cancelled) {
           setCampaignsLoading(false);
@@ -762,31 +1073,40 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [refreshNonce]);
+  }, []);
 
-  const campaignCount = campaigns.length;
-  const creatorCount = new Set(campaigns.map((campaign) => campaign.campaign_creator_address)).size;
-  const totalRecipients = campaigns.reduce(
-    (sum, campaign) => sum + Number(campaign.leaf_count || 0),
-    0,
-  );
-
-  const navigate = (nextRoute) => {
+  const navigateTo = (nextRoute, campaignId = "") => {
     if (typeof window === "undefined") {
       setRoute(nextRoute);
+      setSelectedCampaignId(campaignId);
       return;
     }
 
-    window.location.hash = nextRoute === "campaigns" ? CAMPAIGNS_HASH : HOME_HASH;
+    if (nextRoute === "campaigns") {
+      window.location.hash = CAMPAIGNS_HASH;
+      return;
+    }
+
+    if (nextRoute === "vault") {
+      window.location.hash = VAULT_HASH;
+      return;
+    }
+
+    if (nextRoute === "protocols") {
+      window.location.hash = campaignId
+        ? `${PROTOCOLS_HASH}/${encodeURIComponent(campaignId)}`
+        : PROTOCOLS_HASH;
+      return;
+    }
+
+    window.location.hash = HOME_HASH;
   };
 
   const connectWallet = async () => {
     if (!window.ethereum?.request) {
-      setWallet((current) => ({
-        ...current,
-        error: "No injected wallet found. Install MetaMask or another EVM wallet.",
-      }));
-      throw new Error("No injected wallet found.");
+      const message = "No injected wallet found. Install MetaMask or another EVM wallet.";
+      setWallet((current) => ({ ...current, error: message }));
+      throw new Error(message);
     }
 
     setWallet((current) => ({ ...current, connecting: true, error: "" }));
@@ -795,12 +1115,11 @@ export default function App() {
       const accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
       const chainIdHex = await window.ethereum.request({ method: "eth_chainId" });
       const account = accounts?.[0] || "";
-      const chainId = chainIdHex ? Number.parseInt(chainIdHex, 16).toString() : "";
 
       setWallet((current) => ({
         ...current,
         account,
-        chainId,
+        chainId: chainIdHex ? Number.parseInt(chainIdHex, 16).toString() : "",
         connecting: false,
         error: "",
       }));
@@ -817,296 +1136,79 @@ export default function App() {
     }
   };
 
-  const updateForm = (field, value) => {
-    setForm((current) => ({
-      ...current,
-      [field]: value,
-    }));
-  };
+  if (route === "campaigns") {
+    return (
+      <ZusCampaigns
+        wallet={wallet}
+        onConnect={connectWallet}
+        onNavigateHome={() => navigateTo("home")}
+        onNavigatePage={navigateTo}
+      />
+    );
+  }
 
-  const updateRecipient = (index, field, value) => {
-    setForm((current) => ({
-      ...current,
-      recipients: current.recipients.map((recipient, recipientIndex) =>
-        recipientIndex === index ? { ...recipient, [field]: value } : recipient,
-      ),
-    }));
-  };
+  if (route === "vault") {
+    return (
+      <ZusRewards
+        wallet={wallet}
+        onConnect={connectWallet}
+        onNavigateHome={() => navigateTo("home")}
+        onNavigatePage={navigateTo}
+        campaigns={campaigns}
+        campaignsLoading={campaignsLoading}
+        campaignsError={campaignsError}
+        onOpenCampaign={(campaignId) => navigateTo("protocols", campaignId)}
+      />
+    );
+  }
 
-  const addRecipient = () => {
-    setForm((current) => ({
-      ...current,
-      recipients: [...current.recipients, { ...EMPTY_RECIPIENT }],
-    }));
-  };
-
-  const removeRecipient = (index) => {
-    setForm((current) => ({
-      ...current,
-      recipients:
-        current.recipients.length === 1
-          ? current.recipients
-          : current.recipients.filter((_, recipientIndex) => recipientIndex !== index),
-    }));
-  };
-
-  const resetForm = () => {
-    setForm({
-      name: "",
-      payoutAmount: appConfig.defaultPayoutAmount,
-      fundingAmount: appConfig.defaultFundingAmount,
-      recipients: [{ ...EMPTY_RECIPIENT }],
-    });
-  };
-
-  const validateForm = async () => {
-    const configErrors = getCreateCampaignConfigErrors();
-    if (configErrors.length > 0) {
-      throw new Error(`Missing config: ${configErrors.join(", ")}`);
-    }
-
-    const name = form.name.trim();
-    if (!name) {
-      throw new Error("Campaign name is required.");
-    }
-
-    const payout = parseNativeAmount("Payout amount", form.payoutAmount);
-    const funding = parseNativeAmount("Funding amount", form.fundingAmount, {
-      allowZero: true,
-    });
-
-    const recipients = [];
-    for (const [index, entry] of form.recipients.entries()) {
-      const leafAddress = entry.leaf_address.trim();
-      const amount = entry.amount.trim();
-
-      if (!leafAddress && !amount) {
-        continue;
-      }
-
-      if (!leafAddress || !amount) {
-        throw new Error(`Recipient row ${index + 1} needs both wallet and amount.`);
-      }
-
-      if (!isAddress(leafAddress)) {
-        throw new Error(`Recipient row ${index + 1} has an invalid EVM address.`);
-      }
-
-      if (!/^[0-9]+$/.test(amount)) {
-        throw new Error(`Recipient row ${index + 1} amount must be an integer string.`);
-      }
-
-      recipients.push({
-        leaf_address: leafAddress,
-        amount,
-      });
-    }
-
-    if (recipients.length === 0) {
-      throw new Error("Add at least one recipient.");
-    }
-
-    const creatorAddress = wallet.account || (await connectWallet());
-    if (!creatorAddress || !isAddress(creatorAddress)) {
-      throw new Error("Connect a valid wallet before creating campaigns.");
-    }
-
-    return {
-      name,
-      payoutAmount: payout.displayValue,
-      payoutWei: payout.wei,
-      fundingAmount: funding.displayValue,
-      fundingWei: funding.wei,
-      recipients,
-      creatorAddress,
-    };
-  };
-
-  const deployOnchainCampaign = async (deployment) => {
-    if (!window.ethereum?.request) {
-      throw new Error("No injected wallet found for the contract transaction.");
-    }
-
-    const account = wallet.account || (await connectWallet());
-    if (!account) {
-      throw new Error("Connect a wallet before deploying the onchain campaign.");
-    }
-
-    setCreateState({
-      loading: true,
-      error: "",
-      success: "Rust API campaign ready. Waiting for wallet signature...",
-      txHash: "",
-      apiCampaign: deployment.apiCampaign,
-    });
-
-    const walletClient = createWalletClient({
-      transport: custom(window.ethereum),
-    });
-
-    const transactionHash = await walletClient.sendTransaction({
-      account,
-      to: appConfig.protocolAddress,
-      value: BigInt(deployment.fundingWei),
-      data: encodeFunctionData({
-        abi: zusProtocolAbi,
-        functionName: "createCampaign",
-        args: [
-          deployment.apiCampaign.onchain_campaign_id,
-          appConfig.verifierAddress,
-          toHex(BigInt(deployment.apiCampaign.merkle_root), { size: 32 }),
-          stringToHex(appConfig.campaignMessage, { size: 8 }),
-          BigInt(deployment.payoutWei),
-        ],
-      }),
-    });
-
-    setCreateState({
-      loading: true,
-      error: "",
-      success: "Transaction submitted. Waiting for RPC confirmation...",
-      txHash: transactionHash,
-      apiCampaign: deployment.apiCampaign,
-    });
-
-    const publicClient = createPublicClient({
-      transport: http(appConfig.rpcUrl),
-    });
-
-    await publicClient.waitForTransactionReceipt({ hash: transactionHash });
-
-    setPendingDeployment(null);
-    setCreateState({
-      loading: false,
-      error: "",
-      success: "Campaign created in the Rust API and confirmed onchain.",
-      txHash: transactionHash,
-      apiCampaign: deployment.apiCampaign,
-    });
-    resetForm();
-    setRefreshNonce((current) => current + 1);
-  };
-
-  const submitCreate = async () => {
-    setCreateState((current) => ({
-      ...current,
-      error: "",
-      success: "",
-      txHash: current.txHash,
-    }));
-
-    if (pendingDeployment) {
-      try {
-        await deployOnchainCampaign(pendingDeployment);
-      } catch (error) {
-        setCreateState({
-          loading: false,
-          error: `${parseErrorMessage(error)} The Rust API campaign still exists, so use this button again to finish the onchain step without creating a duplicate API campaign.`,
-          success: "",
-          txHash: "",
-          apiCampaign: pendingDeployment.apiCampaign,
-        });
-      }
-
-      return;
-    }
-
-    let deployment = null;
-
-    try {
-      const validated = await validateForm();
-
-      setCreateState({
-        loading: true,
-        error: "",
-        success: "Creating campaign in the Rust API...",
-        txHash: "",
-        apiCampaign: null,
-      });
-
-      const apiCampaign = await readJson(
-        await fetch(resolveApiUrl("/campaigns"), {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-          },
-          body: JSON.stringify({
-            name: validated.name,
-            campaign_creator_address: validated.creatorAddress,
-            recipients: validated.recipients,
-          }),
-        }),
-      );
-
-      deployment = {
-        apiCampaign,
-        payoutAmount: validated.payoutAmount,
-        payoutWei: validated.payoutWei,
-        fundingAmount: validated.fundingAmount,
-        fundingWei: validated.fundingWei,
-      };
-
-      setPendingDeployment(deployment);
-      await deployOnchainCampaign(deployment);
-    } catch (error) {
-      const detail = parseErrorMessage(error);
-      setCreateState({
-        loading: false,
-        error: deployment
-          ? `${detail} Rust API campaign ${deployment.apiCampaign.campaign_id} was created, but the contract transaction did not finish. Resume with "Complete Onchain Deployment".`
-          : detail,
-        success: "",
-        txHash: "",
-        apiCampaign: deployment?.apiCampaign || null,
-      });
-    }
-  };
+  if (route === "protocols") {
+    return (
+      <ZusProtocolDetail
+        wallet={wallet}
+        onConnect={connectWallet}
+        onNavigateBack={() => navigateTo("vault")}
+        onNavigatePage={navigateTo}
+        campaignId={selectedCampaignId}
+        campaign={campaigns.find((item) => item.campaign_id === selectedCampaignId) || null}
+      />
+    );
+  }
 
   return (
-    <div className="app-frame">
-      <Navigation route={route} onNavigate={navigate} wallet={wallet} onConnect={connectWallet} />
-
+    <>
       {wallet.error ? (
-        <div className="global-banner error">
-          <strong>Wallet</strong>
-          <span>{wallet.error}</span>
+        <div
+          style={{
+            position: "fixed",
+            top: 78,
+            left: "50%",
+            transform: "translateX(-50%)",
+            zIndex: 140,
+            maxWidth: 720,
+            width: "calc(100% - 32px)",
+            border: "1px solid rgba(255,120,120,.25)",
+            background: "rgba(44,14,16,.9)",
+            color: "#d9a2a2",
+            fontFamily: "'Share Tech Mono',monospace",
+            fontSize: 10,
+            letterSpacing: 1,
+            lineHeight: 1.8,
+            padding: "10px 14px",
+          }}
+        >
+          {wallet.error}
         </div>
       ) : null}
 
-      <StatusPanel
+      <LandingPage
+        onNavigateStart={() => navigateTo("vault")}
         wallet={wallet}
-        campaignCount={campaignCount}
-        creatorCount={creatorCount}
-        totalRecipients={totalRecipients}
-        pendingDeployment={pendingDeployment}
-        createState={createState}
-        onNavigate={navigate}
+        onConnect={connectWallet}
+        campaigns={campaigns}
+        campaignsLoading={campaignsLoading}
+        campaignsError={campaignsError}
       />
-
-      {route === "campaigns" ? (
-        <CampaignsPage
-          campaigns={campaigns}
-          campaignsLoading={campaignsLoading}
-          campaignsError={campaignsError}
-          form={form}
-          wallet={wallet}
-          createState={createState}
-          pendingDeployment={pendingDeployment}
-          onFormChange={updateForm}
-          onRecipientChange={updateRecipient}
-          onAddRecipient={addRecipient}
-          onRemoveRecipient={removeRecipient}
-          onSubmitCreate={submitCreate}
-          onRefresh={() => setRefreshNonce((current) => current + 1)}
-        />
-      ) : (
-        <HomePage
-          campaigns={campaigns}
-          wallet={wallet}
-          onConnect={connectWallet}
-          onNavigate={navigate}
-        />
-      )}
-    </div>
+    </>
   );
 }

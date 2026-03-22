@@ -11,6 +11,7 @@ const TEXT    = "#cce8e4";
 const MONO    = "'Share Tech Mono', monospace";
 const BORDER  = "rgba(0,255,200,.08)";
 const BORDER_HOV = "rgba(0,255,200,.22)";
+const TREE_MAX_LEAVES = 1 << 12;
 
 /* ─── pixel cat ─── */
 function PixelCat() {
@@ -104,10 +105,25 @@ function ActionBtn({ children, locked, onClick }) {
 }
 
 /* ─── outline nav button ─── */
-function NavBtn({ children }) {
+function walletLabel(account, connecting) {
+  if (connecting) {
+    return "WALLET_<br/>CONNECTING";
+  }
+
+  if (!account) {
+    return "CONNECT_<br/>WALLET";
+  }
+
+  return `${account.slice(0, 6)}<br/>${account.slice(-4)}`;
+}
+
+function NavBtn({ wallet, onConnect }) {
   const [hov, setHov] = useState(false);
   return (
-    <div onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
+    <div
+      onMouseEnter={() => setHov(true)}
+      onMouseLeave={() => setHov(false)}
+      onClick={() => void onConnect()}
       style={{
         fontFamily:MONO, fontSize:9, letterSpacing:2,
         color: hov ? BG : CYAN,
@@ -116,12 +132,14 @@ function NavBtn({ children }) {
         background: hov ? CYAN : "transparent",
         boxShadow: hov ? `0 0 20px rgba(0,255,200,.5)` : `0 0 10px rgba(0,255,200,.15)`,
         transition:"all .25s", lineHeight:1.4, textAlign:"center",
-      }}>WALLET_<br/>CONNECTED</div>
+      }}
+      dangerouslySetInnerHTML={{ __html: walletLabel(wallet.account, wallet.connecting) }}
+    />
   );
 }
 
 /* ─── reward card ─── */
-function RewardCard({ status, id, name, egress, recipients, reEgress, btnLabel, locked, pending, delay }) {
+function RewardCard({ status, id, name, egress, recipients, reEgress, btnLabel, locked, pending, delay, onAction }) {
   const [ref, vis] = useReveal();
   const [hov, setHov] = useState(false);
   const [claimed, setClaimed] = useState(false);
@@ -192,7 +210,11 @@ function RewardCard({ status, id, name, egress, recipients, reEgress, btnLabel, 
           </div>
 
           {/* action */}
-          <ActionBtn locked={locked} onClick={() => !claimed && setClaimed(true)}>
+          <ActionBtn locked={locked} onClick={() => {
+            if (claimed) return;
+            setClaimed(btnLabel === "CLAIM");
+            onAction?.();
+          }}>
             {claimed ? "CLAIMED ✓" : btnLabel}
           </ActionBtn>
         </>
@@ -253,7 +275,7 @@ function Typewriter({ text, speed=22, delay=0, style: s }) {
 }
 
 /* ─── nav link ─── */
-function NavLink({ label, active }) {
+function NavLink({ label, active, onClick }) {
   const [hov, setHov] = useState(false);
   return (
     <span style={{
@@ -264,32 +286,43 @@ function NavLink({ label, active }) {
       transition:"color .2s, border-color .2s",
       userSelect:"none",
     }}
-      onMouseEnter={e => setHov(true)} onMouseLeave={() => setHov(false)}>
+      onMouseEnter={e => setHov(true)} onMouseLeave={() => setHov(false)}
+      onClick={onClick}>
       {label}
     </span>
   );
 }
 
-/* ─── all campaigns data ─── */
-const ALL_CAMPAIGNS = [
-  { id:"WL-001", name:"WINTER LIQUIDITY PULSE", egress:78.2, recipients:1420, reEgress:78.2, btnLabel:"CLAIM",       filter:"claimable" },
-  { id:"NX-Q1", name:"NEXUS Q1 REWARD",         egress:45.0, recipients:3892, reEgress:45.0, btnLabel:"VIEW DETAILS", filter:"all" },
-  { id:"GN-000", name:"GENESIS AIRDROP",         egress:92.1, recipients:12500,reEgress:92.1, btnLabel:"CLAIM",       filter:"claimable" },
-  { id:"PS-99",  name:"PROTOCOL SHIELDING",      egress:12.4, recipients:642,  reEgress:12.4, btnLabel:"LOCKED",      locked:true, filter:"all" },
-  { id:"IM-V2",  name:"INTEL MINING V2",         egress:33.9, recipients:2110, reEgress:33.9, btnLabel:"CLAIM",       filter:"claimable" },
-  { id:"VO-404", name:"VAULT OVERCLOCK",         egress:61.0, recipients:815,  reEgress:61.0, btnLabel:"VIEW DETAILS", filter:"all" },
-  { id:"MS-Alpha",name:"MONOLITH STAKING",       egress:5.5,  recipients:45,   reEgress:5.5,  btnLabel:"CLAIM",       filter:"claimable" },
-  { pending:true, filter:"all" },
-];
-
 /* ─── main ─── */
-export default function App() {
+export default function App({
+  wallet,
+  onConnect,
+  onNavigatePage,
+  campaigns,
+  campaignsLoading,
+  campaignsError,
+  onOpenCampaign,
+}) {
   const [tab, setTab] = useState("ALL_CAMPAIGNS");
+  const normalizedCampaigns = campaigns.map((campaign) => {
+    const egress = Number(((Number(campaign.leaf_count) / TREE_MAX_LEAVES) * 100).toFixed(1));
 
-  const filtered = ALL_CAMPAIGNS.filter(c => {
+    return {
+      id: campaign.onchain_campaign_id.slice(0, 10).toUpperCase(),
+      campaignId: campaign.campaign_id,
+      name: campaign.name,
+      egress,
+      recipients: Number(campaign.leaf_count),
+      reEgress: egress,
+      btnLabel: "VIEW DETAILS",
+      filter: "all",
+    };
+  });
+
+  const filtered = normalizedCampaigns.filter((campaign) => {
     if (tab === "ALL_CAMPAIGNS") return true;
-    if (tab === "CLAIMABLE") return c.filter === "claimable";
-    if (tab === "COMPLETED") return c.filter === "completed";
+    if (tab === "CLAIMABLE") return false;
+    if (tab === "COMPLETED") return false;
     return true;
   });
 
@@ -351,11 +384,20 @@ export default function App() {
 
           <div style={{ display:"flex", gap:32, alignItems:"center" }}>
             {["Campaigns","Analytics","Vault","Protocols"].map(t => (
-              <NavLink key={t} label={t} active={t === "Vault"} />
+              <NavLink
+                key={t}
+                label={t}
+                active={t === "Vault"}
+                onClick={() => {
+                  if (t === "Campaigns") onNavigatePage("campaigns");
+                  if (t === "Vault") onNavigatePage("vault");
+                  if (t === "Protocols") onNavigatePage("protocols");
+                }}
+              />
             ))}
           </div>
 
-          <NavBtn />
+          <NavBtn wallet={wallet} onConnect={onConnect} />
         </header>
 
         {/* ── MAIN ── */}
@@ -429,9 +471,24 @@ export default function App() {
                 locked={c.locked}
                 pending={c.pending}
                 delay={i * 70}
+                onAction={() => {
+                  onOpenCampaign(c.campaignId);
+                }}
               />
             ))}
           </div>
+
+          {!campaignsLoading && campaignsError ? (
+            <div style={{ marginTop: 16, fontFamily: MONO, fontSize: 9, color: "#a58787", lineHeight: 1.8 }}>
+              CAMPAIGN API UNAVAILABLE. START THE RUST SERVICE TO POPULATE ACTIVE REWARDS.
+            </div>
+          ) : null}
+
+          {!campaignsLoading && !campaignsError && filtered.length === 0 ? (
+            <div style={{ marginTop: 16, fontFamily: MONO, fontSize: 9, color: MUTED, lineHeight: 1.8 }}>
+              NO ACTIVE CAMPAIGNS RETURNED YET.
+            </div>
+          ) : null}
 
         </main>
 
