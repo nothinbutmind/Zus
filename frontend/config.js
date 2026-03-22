@@ -1,9 +1,27 @@
-import { isAddress } from "viem";
+import { formatEther, isAddress } from "viem";
 
 const DEFAULT_API_BASE_URL = "http://127.0.0.1:3000";
 
 function cleanValue(value, fallback = "") {
   return typeof value === "string" && value.trim() ? value.trim() : fallback;
+}
+
+function defaultReadableAmount(readableEnv, weiEnv, fallback) {
+  const readable = cleanValue(readableEnv);
+  if (readable) {
+    return readable;
+  }
+
+  const wei = cleanValue(weiEnv);
+  if (wei && /^[0-9]+$/.test(wei)) {
+    try {
+      return formatEther(BigInt(wei));
+    } catch {
+      return fallback;
+    }
+  }
+
+  return fallback;
 }
 
 export const appConfig = {
@@ -12,13 +30,15 @@ export const appConfig = {
   protocolAddress: cleanValue(import.meta.env.VITE_ZUS_PROTOCOL_ADDRESS),
   verifierAddress: cleanValue(import.meta.env.VITE_ZUS_VERIFIER_ADDRESS),
   campaignMessage: cleanValue(import.meta.env.VITE_ZUS_CAMPAIGN_MESSAGE, "ZUSMVP01"),
-  defaultPayoutWei: cleanValue(
+  defaultPayoutAmount: defaultReadableAmount(
+    import.meta.env.VITE_ZUS_DEFAULT_PAYOUT_AVAX,
     import.meta.env.VITE_ZUS_DEFAULT_PAYOUT_WEI,
-    "100000000000000",
+    "0.0001",
   ),
-  defaultFundingWei: cleanValue(
+  defaultFundingAmount: defaultReadableAmount(
+    import.meta.env.VITE_ZUS_DEFAULT_FUNDING_AVAX,
     import.meta.env.VITE_ZUS_DEFAULT_FUNDING_WEI,
-    "100000000000000",
+    "0.0001",
   ),
   explorerBaseUrl: cleanValue(import.meta.env.VITE_EXPLORER_BASE_URL),
 };

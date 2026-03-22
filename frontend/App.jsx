@@ -4,6 +4,7 @@ import {
   createWalletClient,
   custom,
   encodeFunctionData,
+  parseEther,
   http,
   isAddress,
   stringToHex,
@@ -56,6 +57,31 @@ function parseErrorMessage(error) {
     error?.cause?.message;
 
   return typeof candidate === "string" ? candidate : "Something went wrong.";
+}
+
+function parseNativeAmount(label, rawValue, { allowZero = false } = {}) {
+  const value = rawValue.trim();
+  if (!value) {
+    throw new Error(`${label} is required.`);
+  }
+
+  try {
+    const parsed = parseEther(value);
+    if (!allowZero && parsed <= 0n) {
+      throw new Error(`${label} must be greater than 0.`);
+    }
+
+    return {
+      displayValue: value,
+      wei: parsed.toString(),
+    };
+  } catch (error) {
+    if (error instanceof Error && error.message === `${label} must be greater than 0.`) {
+      throw error;
+    }
+
+    throw new Error(`${label} must be a valid AVAX amount.`);
+  }
 }
 
 async function readJson(response) {
@@ -460,7 +486,7 @@ function CampaignsPage({
           <SectionHeader
             eyebrow="Create campaign"
             title="API first, contract second"
-            body="Use decimal strings for payout and funding amounts in wei. Recipient rows map directly to the Rust API payload."
+            body="Use human-readable AVAX amounts for payout and funding. Recipient rows map directly to the Rust API payload."
           />
 
           <div className="form-grid">
@@ -479,22 +505,22 @@ function CampaignsPage({
             </label>
 
             <label className="field">
-              <span>Payout wei</span>
+              <span>Payout amount (AVAX)</span>
               <input
-                value={form.payoutWei}
-                onChange={(event) => onFormChange("payoutWei", event.target.value)}
-                inputMode="numeric"
-                placeholder="100000000000000"
+                value={form.payoutAmount}
+                onChange={(event) => onFormChange("payoutAmount", event.target.value)}
+                inputMode="decimal"
+                placeholder="0.1"
               />
             </label>
 
             <label className="field">
-              <span>Funding wei</span>
+              <span>Funding amount (AVAX)</span>
               <input
-                value={form.fundingWei}
-                onChange={(event) => onFormChange("fundingWei", event.target.value)}
-                inputMode="numeric"
-                placeholder="100000000000000"
+                value={form.fundingAmount}
+                onChange={(event) => onFormChange("fundingAmount", event.target.value)}
+                inputMode="decimal"
+                placeholder="1.0"
               />
             </label>
           </div>
@@ -620,8 +646,8 @@ export default function App() {
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [form, setForm] = useState({
     name: "",
-    payoutWei: appConfig.defaultPayoutWei,
-    fundingWei: appConfig.defaultFundingWei,
+    payoutAmount: appConfig.defaultPayoutAmount,
+    fundingAmount: appConfig.defaultFundingAmount,
     recipients: [{ ...EMPTY_RECIPIENT }],
   });
   const [pendingDeployment, setPendingDeployment] = useState(null);
@@ -827,8 +853,8 @@ export default function App() {
   const resetForm = () => {
     setForm({
       name: "",
-      payoutWei: appConfig.defaultPayoutWei,
-      fundingWei: appConfig.defaultFundingWei,
+      payoutAmount: appConfig.defaultPayoutAmount,
+      fundingAmount: appConfig.defaultFundingAmount,
       recipients: [{ ...EMPTY_RECIPIENT }],
     });
   };
@@ -844,15 +870,10 @@ export default function App() {
       throw new Error("Campaign name is required.");
     }
 
-    const payoutWei = form.payoutWei.trim();
-    if (!/^[0-9]+$/.test(payoutWei)) {
-      throw new Error("Payout wei must be a base-10 integer.");
-    }
-
-    const fundingWei = form.fundingWei.trim();
-    if (!/^[0-9]+$/.test(fundingWei)) {
-      throw new Error("Funding wei must be a base-10 integer.");
-    }
+    const payout = parseNativeAmount("Payout amount", form.payoutAmount);
+    const funding = parseNativeAmount("Funding amount", form.fundingAmount, {
+      allowZero: true,
+    });
 
     const recipients = [];
     for (const [index, entry] of form.recipients.entries()) {
@@ -892,8 +913,10 @@ export default function App() {
 
     return {
       name,
-      payoutWei,
-      fundingWei,
+      payoutAmount: payout.displayValue,
+      payoutWei: payout.wei,
+      fundingAmount: funding.displayValue,
+      fundingWei: funding.wei,
       recipients,
       creatorAddress,
     };
@@ -1017,7 +1040,9 @@ export default function App() {
 
       deployment = {
         apiCampaign,
+        payoutAmount: validated.payoutAmount,
         payoutWei: validated.payoutWei,
+        fundingAmount: validated.fundingAmount,
         fundingWei: validated.fundingWei,
       };
 

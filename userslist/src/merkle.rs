@@ -407,7 +407,8 @@ fn claim_payload_from_row(row: ClaimPayloadRow) -> Result<ClaimPayloadResponse, 
 }
 
 fn uuid_to_onchain_campaign_id(campaign_id: Uuid) -> String {
-    format!("0x{:0>64}", campaign_id.simple())
+    let compact_uuid = campaign_id.simple().to_string();
+    format!("0x{:0>64}", compact_uuid)
 }
 
 fn normalize_recipients(
@@ -573,6 +574,7 @@ fn parse_campaign_id(campaign_id: &str) -> Result<Uuid, AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
 
     fn sample_request() -> CreateCampaignRequest {
         CreateCampaignRequest {
@@ -592,6 +594,37 @@ mod tests {
                     amount: "500".to_string(),
                 },
             ],
+        }
+    }
+
+    fn creator_consistency_address() -> &'static str {
+        "0x308056ef9E0e21CD3e15414F59a17e9d4C510638"
+    }
+
+    fn recipient_consistency_addresses() -> Vec<String> {
+        let mut addresses = vec![creator_consistency_address().to_string()];
+
+        for value in 1..=10u8 {
+            addresses.push(format!("0x{:040x}", value));
+        }
+
+        addresses
+    }
+
+    fn named_campaign_request(name: &str) -> CreateCampaignRequest {
+        let recipients = recipient_consistency_addresses()
+            .into_iter()
+            .enumerate()
+            .map(|(index, leaf_address)| RecipientInput {
+                leaf_address,
+                amount: ((index + 1) * 100).to_string(),
+            })
+            .collect();
+
+        CreateCampaignRequest {
+            name: name.to_string(),
+            campaign_creator_address: creator_consistency_address().to_string(),
+            recipients,
         }
     }
 
@@ -660,5 +693,58 @@ mod tests {
             field_to_decimal_string(&hash),
             "1594597865669602199208529098208508950092942746041644072252494753744672355203"
         );
+    }
+
+    #[test]
+    fn named_reward_campaigns_stay_consistent_with_solidity_inputs() {
+        let names = [
+            "crecimiento_rewards",
+            "avalance_rewards",
+            "latam_rewards",
+        ];
+        let expected_creator = "0x308056ef9e0e21cd3e15414f59a17e9d4c510638";
+        let expected_first_recipient = expected_creator;
+
+        let prepared_campaigns = names
+            .into_iter()
+            .map(|name| {
+                prepare_campaign(named_campaign_request(name))
+                    .unwrap_or_else(|error| panic!("campaign {name} should prepare: {error}"))
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(prepared_campaigns.len(), 3);
+        assert_eq!(
+            prepared_campaigns[0].summary.merkle_root,
+            prepared_campaigns[1].summary.merkle_root
+        );
+        assert_eq!(
+            prepared_campaigns[1].summary.merkle_root,
+            prepared_campaigns[2].summary.merkle_root
+        );
+
+        let unique_campaign_ids = prepared_campaigns
+            .iter()
+            .map(|prepared| prepared.summary.onchain_campaign_id.clone())
+            .collect::<HashSet<_>>();
+        assert_eq!(unique_campaign_ids.len(), prepared_campaigns.len());
+
+        for (index, prepared) in prepared_campaigns.iter().enumerate() {
+            assert_eq!(prepared.summary.name, names[index]);
+            assert_eq!(prepared.summary.campaign_creator_address, expected_creator);
+            assert_eq!(prepared.summary.leaf_count, 11);
+            assert_eq!(prepared.summary.depth, TREE_DEPTH);
+            assert_eq!(prepared.summary.hash_algorithm, HASH_ALGORITHM);
+            assert_eq!(prepared.summary.leaf_encoding, LEAF_ENCODING);
+            assert_eq!(prepared.claims.len(), 11);
+            assert_eq!(prepared.claims[0].leaf_address, expected_first_recipient);
+            assert_eq!(prepared.claims[0].amount, "100");
+            assert_eq!(prepared.claims[10].leaf_address, "0x000000000000000000000000000000000000000a");
+            assert_eq!(prepared.claims[10].amount, "1100");
+            assert_eq!(prepared.claims[0].proof.len(), TREE_DEPTH);
+            assert!(prepared.summary.merkle_root.chars().all(|character| character.is_ascii_digit()));
+            assert_eq!(prepared.summary.onchain_campaign_id.len(), 66);
+            assert!(prepared.summary.onchain_campaign_id.starts_with("0x"));
+        }
     }
 }

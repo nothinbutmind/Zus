@@ -5,6 +5,7 @@ import {IVerifier, ZusProtocol} from "../src/ZusProtocol.sol";
 
 interface Vm {
     function prank(address sender) external;
+    function deal(address account, uint256 newBalance) external;
     function expectRevert(bytes calldata revertData) external;
 }
 
@@ -25,6 +26,7 @@ contract MockVerifier is IVerifier {
 
 contract ZusProtocolTest {
     bytes32 internal constant CAMPAIGN_ID = bytes32(uint256(0xCAFE));
+    address internal constant CONSISTENCY_CREATOR = 0x308056ef9E0e21CD3e15414F59a17e9d4C510638;
     bytes8 internal constant MESSAGE = "ZUSMVP01";
     bytes32 internal constant ROOT = bytes32(uint256(0x1234));
     uint256 internal constant PAYOUT = 0.25 ether;
@@ -84,6 +86,45 @@ contract ZusProtocolTest {
 
         (,,,,, uint256 campaignBalance,) = protocol.campaigns(CAMPAIGN_ID);
         require(campaignBalance == 1.5 ether, "campaign not funded");
+    }
+
+    function testCreateThreeRewardCampaignsStoresIndependentConfigs() public {
+        bytes32[3] memory campaignIds = [
+            keccak256("crecimiento_rewards"),
+            keccak256("avalance_rewards"),
+            keccak256("latam_rewards")
+        ];
+        uint256[3] memory payouts = [uint256(0.1 ether), uint256(0.2 ether), uint256(0.3 ether)];
+        uint256[3] memory funding = [uint256(1 ether), uint256(2 ether), uint256(3 ether)];
+
+        VM.deal(CONSISTENCY_CREATOR, 6 ether);
+
+        for (uint256 i = 0; i < campaignIds.length; ++i) {
+            VM.prank(CONSISTENCY_CREATOR);
+            protocol.createCampaign{value: funding[i]}(
+                campaignIds[i], address(verifier), ROOT, MESSAGE, payouts[i]
+            );
+        }
+
+        for (uint256 i = 0; i < campaignIds.length; ++i) {
+            (
+                address owner,
+                address campaignVerifier,
+                bytes32 eligibleRoot,
+                bytes8 expectedMessage,
+                uint256 payoutAmount,
+                uint256 campaignBalance,
+                bool exists
+            ) = protocol.campaigns(campaignIds[i]);
+
+            require(owner == CONSISTENCY_CREATOR, "wrong campaign owner");
+            require(campaignVerifier == address(verifier), "wrong verifier");
+            require(eligibleRoot == ROOT, "wrong root");
+            require(expectedMessage == MESSAGE, "wrong message");
+            require(payoutAmount == payouts[i], "wrong payout");
+            require(campaignBalance == funding[i], "wrong balance");
+            require(exists, "campaign missing");
+        }
     }
 
     function testClaimPaysStealthAddressAndMarksNullifierUsed() public {
