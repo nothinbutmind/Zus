@@ -3,3 +3,6 @@ zus_addy/target/
 tui/target/
 frontend/node_modules/
 frontend/dist/
+verifier/cache
+verifier/build-info
+
