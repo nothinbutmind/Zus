@@ -3,6 +3,9 @@ use std::{env, io::Stdout, path::PathBuf};
 use ratatui::{Terminal, backend::CrosstermBackend};
 use serde::Deserialize;
 
+pub const DEFAULT_API_BASE_URL: &str = "http://127.0.0.1:3000";
+pub const DEFAULT_ZUS_PROTOCOL_ADDRESS: &str = "0x19b2d6A4D21078A215406eeF1F71731AEE84F7b4";
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Focus {
     Actions,
@@ -145,37 +148,13 @@ impl App {
                     kind: ActionKind::GenerateZkWitness,
                     label: "Prove + Claim",
                     command_label: "API claim + nargo + bb + cast send",
-                    description: "Resolve a saved Foundry wallet, fetch the Rust API claim payload, write Prover.toml, generate the witness plus zk proof, preview the decoded stealth recipient, and submit the claim transaction to ZusProtocol.",
+                    description: "Fill Campaign, Wallet Account, and Keystore Password. The TUI auto-fetches the API claim payload, uses the default Fuji RPC plus ZusProtocol address, generates the proof, and submits the claim.",
                     fields: vec![
-                        FormField {
-                            key: "api_base_url",
-                            label: "API Base URL",
-                            hint: "http://127.0.0.1:3000",
-                            value: "http://127.0.0.1:3000".to_string(),
-                            sensitive: false,
-                            required: true,
-                        },
                         FormField {
                             key: "campaign_selector",
                             label: "Campaign",
                             hint: "required: campaign name for this wallet",
                             value: String::new(),
-                            sensitive: false,
-                            required: true,
-                        },
-                        FormField {
-                            key: "protocol_address",
-                            label: "Protocol",
-                            hint: "required: deployed ZusProtocol address",
-                            value: String::new(),
-                            sensitive: false,
-                            required: true,
-                        },
-                        FormField {
-                            key: "rpc_url",
-                            label: "RPC URL",
-                            hint: "https://avalanche-fuji.drpc.org",
-                            value: default_rpc_url(),
                             sensitive: false,
                             required: true,
                         },
@@ -193,54 +172,6 @@ impl App {
                             hint: "password for the saved wallet",
                             value: String::new(),
                             sensitive: true,
-                            required: true,
-                        },
-                        FormField {
-                            key: "keystore_path",
-                            label: "Keystore Path",
-                            hint: "optional: explicit keystore file path",
-                            value: String::new(),
-                            sensitive: false,
-                            required: false,
-                        },
-                        FormField {
-                            key: "circuit_dir",
-                            label: "Circuit Dir",
-                            hint: "../zus_addy",
-                            value: default_circuit_dir(),
-                            sensitive: false,
-                            required: true,
-                        },
-                        FormField {
-                            key: "witness_name",
-                            label: "Witness Name",
-                            hint: "claim_witness",
-                            value: "claim_witness".to_string(),
-                            sensitive: false,
-                            required: false,
-                        },
-                        FormField {
-                            key: "bb_crs_path",
-                            label: "BB CRS Path",
-                            hint: "~/.bb-crs",
-                            value: default_bb_crs_path(),
-                            sensitive: false,
-                            required: true,
-                        },
-                        FormField {
-                            key: "verifier_vk_path",
-                            label: "Verifier VK",
-                            hint: "../verifier/generated/stealthdrop/vk/vk",
-                            value: default_verifier_vk_path(),
-                            sensitive: false,
-                            required: true,
-                        },
-                        FormField {
-                            key: "proof_output_dir",
-                            label: "Proof Output Dir",
-                            hint: "../verifier/generated/stealthdrop/proof_tui",
-                            value: default_proof_output_dir(),
-                            sensitive: false,
                             required: true,
                         },
                     ],
@@ -384,7 +315,7 @@ impl App {
             selected_field: 0,
             focus: Focus::Actions,
             output:
-                "Campaign Explorer checks claimability. Prove + Claim resolves a saved wallet, fetches the Rust API claim payload, writes Prover.toml, generates the proof, and submits the claim transaction."
+                "Campaign Explorer checks claimability. Prove + Claim only needs Campaign, Wallet Account, and Keystore Password, then it auto-runs the full proof and claim flow."
                     .to_string(),
             last_command: "GET http://127.0.0.1:3000/campaigns".to_string(),
             status: "Ready".to_string(),
@@ -486,7 +417,7 @@ impl App {
     }
 }
 
-fn default_circuit_dir() -> String {
+pub fn default_circuit_dir() -> String {
     let current_dir = env::current_dir().ok();
     let fallback = "../zus_addy".to_string();
 
@@ -506,17 +437,26 @@ fn default_circuit_dir() -> String {
         .to_string()
 }
 
-fn default_rpc_url() -> String {
-    "https://avalanche-fuji.drpc.org".to_string()
+pub fn default_api_base_url() -> String {
+    env::var("ZUS_API_BASE_URL").unwrap_or_else(|_| DEFAULT_API_BASE_URL.to_string())
 }
 
-fn default_bb_crs_path() -> String {
+pub fn default_rpc_url() -> String {
+    env::var("ZUS_RPC_URL").unwrap_or_else(|_| "https://avalanche-fuji.drpc.org".to_string())
+}
+
+pub fn default_protocol_address() -> String {
+    env::var("ZUS_PROTOCOL_ADDRESS")
+        .unwrap_or_else(|_| DEFAULT_ZUS_PROTOCOL_ADDRESS.to_string())
+}
+
+pub fn default_bb_crs_path() -> String {
     env::var("BB_CRS_PATH")
         .or_else(|_| env::var("HOME").map(|home| format!("{home}/.bb-crs")))
         .unwrap_or_else(|_| "~/.bb-crs".to_string())
 }
 
-fn default_verifier_vk_path() -> String {
+pub fn default_verifier_vk_path() -> String {
     let current_dir = env::current_dir().ok();
     let fallback = "../verifier/generated/stealthdrop/vk/vk".to_string();
 
@@ -538,7 +478,7 @@ fn default_verifier_vk_path() -> String {
         .to_string()
 }
 
-fn default_proof_output_dir() -> String {
+pub fn default_proof_output_dir() -> String {
     let current_dir = env::current_dir().ok();
     let fallback = "../verifier/generated/stealthdrop/proof_tui".to_string();
 

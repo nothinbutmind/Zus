@@ -12,7 +12,8 @@ use std::{
 use crate::error::{AppError, AppResult};
 use crate::types::{
     ActionForm, ActionKind, ApiCampaignSummary, ApiClaimPayload, App, AppTerminal, CommandResult,
-    Focus,
+    Focus, default_api_base_url, default_bb_crs_path, default_circuit_dir, default_proof_output_dir,
+    default_protocol_address, default_rpc_url, default_verifier_vk_path,
 };
 use crossterm::{
     event::{self, Event, KeyCode, KeyEventKind},
@@ -735,48 +736,28 @@ fn run_campaign_lookup(form: &ActionForm) -> AppResult<CommandResult> {
 }
 
 fn run_generate_zk_witness(form: &ActionForm) -> AppResult<CommandResult> {
-    let api_base = normalize_api_base_url(&required_value(
-        form,
-        "api_base_url",
-        "API base URL is required.",
-    )?)?;
-    let protocol_address = normalize_protocol_address(&required_value(
-        form,
-        "protocol_address",
-        "Protocol address is required.",
-    )?)?;
-    let rpc_url = normalize_rpc_url(&required_value(
-        form,
-        "rpc_url",
-        "RPC URL is required.",
-    )?)?;
+    let api_base = normalize_api_base_url(&default_api_base_url())?;
+    let protocol_address = normalize_protocol_address(&default_protocol_address())?;
+    let rpc_url = normalize_rpc_url(&default_rpc_url())?;
     let campaign_selector = required_value(
         form,
         "campaign_selector",
         "Campaign name or UUID is required.",
     )?;
-    let circuit_dir = normalize_circuit_dir(&required_value(
-        form,
-        "circuit_dir",
-        "Circuit dir is required.",
-    )?)?;
+    let circuit_dir = normalize_circuit_dir(&default_circuit_dir())?;
     let bb_crs_path = normalize_existing_dir(
-        &required_value(form, "bb_crs_path", "BB CRS path is required.")?,
+        &default_bb_crs_path(),
         "BB CRS path",
     )?;
     let verifier_vk_path = normalize_existing_file(
-        &required_value(form, "verifier_vk_path", "Verifier VK path is required.")?,
+        &default_verifier_vk_path(),
         "Verifier VK path",
     )?;
     let proof_output_dir = normalize_output_dir(
-        &required_value(form, "proof_output_dir", "Proof output dir is required.")?,
+        &default_proof_output_dir(),
         "Proof output dir",
     )?;
-    let witness_name = if form.value("witness_name").is_empty() {
-        "claim_witness".to_string()
-    } else {
-        form.value("witness_name").to_string()
-    };
+    let witness_name = "claim_witness".to_string();
 
     let wallet = resolve_wallet_for_zk(form)?;
     let resolved_campaign = resolve_campaign_claim_for_wallet(
