@@ -132,7 +132,7 @@ function JsonPanel({ campaignName, instant, merkle }) {
   "merkle_verified": ${merkle},
   "distribution_matrix": [
     {
-      "address": "0x71C765...d897",
+      "address": "0x71C76i5...d897",
       "weight": 0.45
     },
     {
