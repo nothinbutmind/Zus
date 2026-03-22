@@ -3,7 +3,8 @@ mod types;
 
 use std::fmt::Write as _;
 use std::{
-    env, io,
+    env, fs, io,
+    path::{Path, PathBuf},
     process::{Command, Stdio},
     time::Duration,
 };
@@ -18,6 +19,8 @@ use crossterm::{
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
+use k256::{PublicKey, SecretKey, elliptic_curve::sec1::ToEncodedPoint};
+use rand::{RngCore, rngs::OsRng};
 use ratatui::{
     Frame, Terminal,
     backend::CrosstermBackend,
@@ -60,6 +63,22 @@ enum ClaimStatus {
     Error(String),
 }
 
+struct ResolvedWallet {
+    account_label: String,
+    address: String,
+    pub_key_x: [u8; 32],
+    pub_key_y: [u8; 32],
+}
+
+struct AutoWitnessSecrets {
+    message: [u8; 8],
+    stealth_tweak: [u8; 32],
+    c_scalar: [u8; 32],
+    s_scalar: [u8; 32],
+    nullifier_x: [u8; 32],
+    nullifier_y: [u8; 32],
+}
+
 impl App {
     fn run(&mut self) {
         let action_kind = self.current_form().kind;
@@ -70,7 +89,9 @@ impl App {
             Ok(result) => {
                 let auto_filled_address = if matches!(
                     action_kind,
-                    ActionKind::CheckAddress | ActionKind::CreateWallet
+                    ActionKind::CheckAddress
+                        | ActionKind::CreateWallet
+                        | ActionKind::GenerateZkWitness
                 ) && result.success
                 {
                     extract_wallet_address(&result.output)
@@ -122,6 +143,7 @@ impl App {
 fn execute_action(form: &ActionForm) -> AppResult<CommandResult> {
     match form.kind {
         ActionKind::CampaignExplorer => run_campaign_lookup(form),
+        ActionKind::GenerateZkWitness => run_generate_zk_witness(form),
         _ => {
             let args = build_command(form)?;
             run_cast_command(&args)
@@ -490,6 +512,9 @@ fn build_command(form: &ActionForm) -> AppResult<Vec<String>> {
         ActionKind::CampaignExplorer => Err(AppError::message(
             "Campaign Explorer is handled through the proof API, not cast.",
         )),
+        ActionKind::GenerateZkWitness => Err(AppError::message(
+            "Generate ZK Witness is handled through the Noir circuit flow, not cast.",
+        )),
         ActionKind::ListAccounts => {
             let keystore_dir = normalize_path(form.value("keystore_dir"));
             let mut args = vec!["wallet".to_string(), "list".to_string()];
@@ -587,12 +612,20 @@ fn focus_fields_for_error(app: &mut App, message: &str) {
     let lowered = message.to_ascii_lowercase();
     let key = if lowered.contains("api base url") {
         Some("api_base_url")
+    } else if lowered.contains("campaign id") {
+        Some("campaign_id")
     } else if lowered.contains("wallet address") {
         Some("wallet_address")
+    } else if lowered.contains("wallet account") {
+        Some("wallet_account")
     } else if lowered.contains("saved account") || lowered.contains("account name") {
         Some("account_name")
     } else if lowered.contains("keystore path") {
         Some("keystore_path")
+    } else if lowered.contains("circuit dir") {
+        Some("circuit_dir")
+    } else if lowered.contains("witness name") {
+        Some("witness_name")
     } else if lowered.contains("keystore dir") {
         Some("keystore_dir")
     } else if lowered.contains("password") {
@@ -680,6 +713,188 @@ fn run_campaign_lookup(form: &ActionForm) -> AppResult<CommandResult> {
     }
 }
 
+fn run_generate_zk_witness(form: &ActionForm) -> AppResult<CommandResult> {
+    let api_base = normalize_api_base_url(&required_value(
+        form,
+        "api_base_url",
+        "API base URL is required.",
+    )?)?;
+    let campaign_id = required_value(form, "campaign_id", "Campaign ID is required.")?;
+    let circuit_dir = normalize_circuit_dir(&required_value(
+        form,
+        "circuit_dir",
+        "Circuit dir is required.",
+    )?)?;
+    let witness_name = if form.value("witness_name").is_empty() {
+        "claim_witness".to_string()
+    } else {
+        form.value("witness_name").to_string()
+    };
+
+    let wallet = resolve_wallet_for_zk(form)?;
+    let claim = fetch_claim_payload_for_campaign(&api_base, &campaign_id, &wallet.address)?;
+    let prover_path = circuit_dir.join("Prover.toml");
+    let secrets = generate_auto_witness_secrets()?;
+    let prover_contents = build_prover_toml_contents(&wallet, &claim, &secrets)?;
+
+    fs::write(&prover_path, prover_contents).map_err(|source| {
+        AppError::io(format!("failed to write {}", prover_path.display()), source)
+    })?;
+
+    let execute_result = run_nargo_execute(&circuit_dir, &witness_name)?;
+    let witness_path = circuit_dir
+        .join("target")
+        .join(format!("{witness_name}.gz"));
+    let bytecode_path = circuit_dir.join("target").join("stealthdrop.json");
+    let mut output = String::new();
+    let _ = writeln!(output, "Resolved wallet: {}", wallet.account_label);
+    let _ = writeln!(output, "Resolved address: {}", wallet.address);
+    let _ = writeln!(output, "Campaign ID: {campaign_id}");
+    let _ = writeln!(output, "Claim leaf address: {}", claim.leaf_address);
+    let _ = writeln!(output, "Prover file: {}", prover_path.display());
+    let _ = writeln!(output, "Witness path: {}", witness_path.display());
+    let _ = writeln!(output, "Bytecode path: {}", bytecode_path.display());
+    let _ = writeln!(output, "Message hex: {}", bytes_to_hex(&secrets.message));
+    let _ = writeln!(
+        output,
+        "Stealth tweak: {}",
+        bytes_to_hex(&secrets.stealth_tweak)
+    );
+    let _ = writeln!(output);
+    let _ = writeln!(
+        output,
+        "nargo execute output:\n{}",
+        execute_result.output.trim()
+    );
+    let _ = writeln!(output);
+    let _ = writeln!(
+        output,
+        "Next proof step: bb prove -s ultra_honk -b {} -w {} -o {}/proof",
+        bytecode_path.display(),
+        witness_path.display(),
+        circuit_dir.join("target").display()
+    );
+    let _ = writeln!(
+        output,
+        "Note: the installed bb CLI still needs extra VK setup on this machine, so this action currently wires the proven path through Noir witness generation."
+    );
+
+    Ok(CommandResult {
+        command_preview: format!(
+            "write {} + nargo execute {}",
+            prover_path.display(),
+            witness_name
+        ),
+        output,
+        success: execute_result.success,
+    })
+}
+
+fn resolve_wallet_for_zk(form: &ActionForm) -> AppResult<ResolvedWallet> {
+    let account_name = required_value(
+        form,
+        "wallet_account",
+        "Wallet account is required for ZK witness generation.",
+    )?;
+    let password = required_value(
+        form,
+        "password",
+        "Password is required for ZK witness generation.",
+    )?;
+    let keystore_path = normalize_path(form.value("keystore_path"));
+
+    let address_result = run_cast_command(&build_saved_wallet_address_command(
+        &account_name,
+        &keystore_path,
+        &password,
+    )?)?;
+    if !address_result.success {
+        return Err(AppError::message(format!(
+            "failed to resolve wallet address from Foundry keystore: {}",
+            address_result.output.trim()
+        )));
+    }
+
+    let public_key_result = run_cast_command(&build_saved_wallet_public_key_command(
+        &account_name,
+        &keystore_path,
+        &password,
+    )?)?;
+    if !public_key_result.success {
+        return Err(AppError::message(format!(
+            "failed to resolve wallet public key from Foundry keystore: {}",
+            public_key_result.output.trim()
+        )));
+    }
+
+    let address = extract_wallet_address(&address_result.output).ok_or_else(|| {
+        AppError::message(
+            "cast returned output, but I could not extract a wallet address from it.".to_string(),
+        )
+    })?;
+    let public_key_bytes = extract_public_key_bytes(&public_key_result.output)?;
+
+    Ok(ResolvedWallet {
+        account_label: normalize_foundry_account_name(&account_name),
+        address,
+        pub_key_x: public_key_bytes[..32]
+            .try_into()
+            .map_err(|_| AppError::message("failed to parse wallet public key x coordinate"))?,
+        pub_key_y: public_key_bytes[32..]
+            .try_into()
+            .map_err(|_| AppError::message("failed to parse wallet public key y coordinate"))?,
+    })
+}
+
+fn fetch_claim_payload_for_campaign(
+    api_base: &str,
+    campaign_id: &str,
+    wallet_address: &str,
+) -> AppResult<ApiClaimPayload> {
+    let claim_url = format!("{api_base}/campaigns/{campaign_id}/claim/{wallet_address}");
+    let client = Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|source| AppError::http("failed to build the proof API client", source))?;
+    let response = client
+        .get(&claim_url)
+        .send()
+        .map_err(|source| AppError::http(format!("failed to fetch {claim_url}"), source))?;
+    parse_json_response::<ApiClaimPayload>(response, &claim_url)
+}
+
+fn build_prover_toml_contents(
+    wallet: &ResolvedWallet,
+    claim: &ApiClaimPayload,
+    secrets: &AutoWitnessSecrets,
+) -> AppResult<String> {
+    let mut prover = String::new();
+    prover.push_str(&format_u8_array_toml("c", &secrets.c_scalar));
+    prover.push_str(&format_field_scalar_toml(
+        "eligible_index",
+        &claim.noir_inputs.eligible_index,
+    ));
+    prover.push_str(&format_string_array_toml(
+        "eligible_path",
+        &claim.noir_inputs.eligible_path,
+    ));
+    prover.push_str(&format_field_scalar_toml(
+        "eligible_root",
+        &claim.noir_inputs.eligible_root,
+    ));
+    prover.push_str(&format_u8_array_toml("message", &secrets.message));
+    prover.push_str(&format_u8_array_toml("nullifier_x", &secrets.nullifier_x));
+    prover.push_str(&format_u8_array_toml("nullifier_y", &secrets.nullifier_y));
+    prover.push_str(&format_u8_array_toml("pub_key_x", &wallet.pub_key_x));
+    prover.push_str(&format_u8_array_toml("pub_key_y", &wallet.pub_key_y));
+    prover.push_str(&format_u8_array_toml("s", &secrets.s_scalar));
+    prover.push_str(&format_u8_array_toml(
+        "stealth_tweak",
+        &secrets.stealth_tweak,
+    ));
+    Ok(prover)
+}
+
 fn resolve_campaign_wallet_address(form: &ActionForm) -> AppResult<Option<String>> {
     let wallet_identifier = form.value("wallet_address");
     let password = form.value("password");
@@ -757,6 +972,65 @@ fn build_saved_wallet_address_command(
     ))
 }
 
+fn build_saved_wallet_public_key_command(
+    account_name: &str,
+    keystore_path: &str,
+    password: &str,
+) -> AppResult<Vec<String>> {
+    let mut args = vec!["wallet".to_string(), "public-key".to_string()];
+
+    if !keystore_path.is_empty() {
+        if password.is_empty() {
+            return Err(AppError::message(
+                "Password is required for a saved Foundry account or keystore path.",
+            ));
+        }
+        args.push("--keystore".to_string());
+        args.push(keystore_path.to_string());
+        args.push("--password".to_string());
+        args.push(password.to_string());
+        return Ok(args);
+    }
+
+    if !account_name.is_empty() {
+        if password.is_empty() {
+            return Err(AppError::message(
+                "Password is required for a saved Foundry account or keystore path.",
+            ));
+        }
+        args.push("--keystore".to_string());
+        args.push(format!(
+            "{}/{}",
+            default_foundry_keystore_dir(),
+            normalize_foundry_account_name(account_name)
+        ));
+        args.push("--password".to_string());
+        args.push(password.to_string());
+        return Ok(args);
+    }
+
+    Err(AppError::message(
+        "Provide a saved account name or keystore path.",
+    ))
+}
+
+fn normalize_circuit_dir(raw: &str) -> AppResult<PathBuf> {
+    let normalized = PathBuf::from(normalize_path(raw));
+    if !normalized.exists() {
+        return Err(AppError::message(format!(
+            "Circuit dir does not exist: {}",
+            normalized.display()
+        )));
+    }
+    if !normalized.join("Nargo.toml").exists() {
+        return Err(AppError::message(format!(
+            "Circuit dir does not contain Nargo.toml: {}",
+            normalized.display()
+        )));
+    }
+    Ok(normalized)
+}
+
 fn normalize_api_base_url(raw: &str) -> AppResult<String> {
     let trimmed = raw.trim().trim_end_matches('/');
     if trimmed.is_empty() {
@@ -791,6 +1065,157 @@ fn normalize_foundry_account_name(raw: &str) -> String {
         .unwrap_or(raw.trim())
         .trim()
         .to_string()
+}
+
+fn extract_public_key_bytes(output: &str) -> AppResult<[u8; 64]> {
+    let raw = output
+        .lines()
+        .map(str::trim)
+        .find(|line| line.starts_with("0x"))
+        .ok_or_else(|| AppError::message("could not find a public key in cast output"))?;
+
+    let trimmed = raw.trim_start_matches("0x");
+    let without_prefix = if trimmed.len() == 130 && trimmed.starts_with("04") {
+        &trimmed[2..]
+    } else {
+        trimmed
+    };
+
+    let bytes = parse_hex_bytes(without_prefix, 64, "Public key")?;
+    bytes
+        .try_into()
+        .map_err(|_| AppError::message("public key must decode to exactly 64 bytes".to_string()))
+}
+
+fn parse_hex_bytes(raw: &str, expected_len: usize, label: &str) -> AppResult<Vec<u8>> {
+    let trimmed = raw.trim().trim_start_matches("0x");
+    if trimmed.len() != expected_len * 2 {
+        return Err(AppError::message(format!(
+            "{label} must be exactly {} hex characters",
+            expected_len * 2
+        )));
+    }
+
+    if !trimmed
+        .chars()
+        .all(|character| character.is_ascii_hexdigit())
+    {
+        return Err(AppError::message(format!(
+            "{label} contains non-hex characters"
+        )));
+    }
+
+    (0..expected_len)
+        .map(|index| {
+            let start = index * 2;
+            u8::from_str_radix(&trimmed[start..start + 2], 16)
+                .map_err(|_| AppError::message(format!("{label} contains invalid hex byte data")))
+        })
+        .collect()
+}
+
+fn format_u8_array_toml(name: &str, bytes: &[u8]) -> String {
+    let body = bytes
+        .iter()
+        .map(|byte| format!("\"{byte}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{name} = [{body}]\n")
+}
+
+fn format_string_array_toml(name: &str, values: &[String]) -> String {
+    let body = values
+        .iter()
+        .map(|value| format!("\"{value}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{name} = [{body}]\n")
+}
+
+fn format_field_scalar_toml(name: &str, value: &str) -> String {
+    format!("{name} = \"{}\"\n", value.trim())
+}
+
+fn generate_auto_witness_secrets() -> AppResult<AutoWitnessSecrets> {
+    let mut rng = OsRng;
+
+    let mut message = [0_u8; 8];
+    rng.fill_bytes(&mut message);
+
+    let stealth_tweak = secret_key_bytes();
+    let c_scalar = secret_key_bytes();
+    let s_scalar = secret_key_bytes();
+    let nullifier_secret = SecretKey::random(&mut rng);
+    let nullifier_public = PublicKey::from_secret_scalar(&nullifier_secret.to_nonzero_scalar());
+    let encoded = nullifier_public.to_encoded_point(false);
+    let x = encoded
+        .x()
+        .ok_or_else(|| AppError::message("failed to derive nullifier x coordinate"))?;
+    let y = encoded
+        .y()
+        .ok_or_else(|| AppError::message("failed to derive nullifier y coordinate"))?;
+    let mut nullifier_x = [0_u8; 32];
+    let mut nullifier_y = [0_u8; 32];
+    nullifier_x.copy_from_slice(x);
+    nullifier_y.copy_from_slice(y);
+
+    Ok(AutoWitnessSecrets {
+        message,
+        stealth_tweak,
+        c_scalar,
+        s_scalar,
+        nullifier_x,
+        nullifier_y,
+    })
+}
+
+fn secret_key_bytes() -> [u8; 32] {
+    let mut rng = OsRng;
+    let secret = SecretKey::random(&mut rng);
+    secret.to_bytes().into()
+}
+
+fn bytes_to_hex(bytes: &[u8]) -> String {
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        let _ = write!(output, "{byte:02x}");
+    }
+    output
+}
+
+fn run_nargo_execute(circuit_dir: &Path, witness_name: &str) -> AppResult<CommandResult> {
+    let output = Command::new("nargo")
+        .current_dir(circuit_dir)
+        .args(["execute", witness_name, "--skip-brillig-constraints-check"])
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|source| {
+            AppError::command_launch(
+                format!(
+                    "nargo execute {} --skip-brillig-constraints-check",
+                    witness_name
+                ),
+                source,
+            )
+        })?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let combined = match (stdout.trim(), stderr.trim()) {
+        ("", "") => "(no output)".to_string(),
+        ("", stderr) => stderr.to_string(),
+        (stdout, "") => stdout.to_string(),
+        (stdout, stderr) => format!("{stdout}\n\n{stderr}"),
+    };
+
+    Ok(CommandResult {
+        command_preview: format!(
+            "nargo execute {} --skip-brillig-constraints-check",
+            witness_name
+        ),
+        output: combined,
+        success: output.status.success(),
+    })
 }
 
 fn format_saved_accounts_output(output: &str) -> String {

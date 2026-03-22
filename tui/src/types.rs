@@ -1,4 +1,4 @@
-use std::io::Stdout;
+use std::{env, io::Stdout, path::PathBuf};
 
 use ratatui::{Terminal, backend::CrosstermBackend};
 use serde::Deserialize;
@@ -12,6 +12,7 @@ pub enum Focus {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ActionKind {
     CampaignExplorer,
+    GenerateZkWitness,
     ListAccounts,
     CheckAddress,
     CreateWallet,
@@ -131,6 +132,70 @@ impl App {
                             label: "Keystore Path",
                             hint: "optional: explicit keystore file path",
                             value: String::new(),
+                            sensitive: false,
+                            required: false,
+                        },
+                    ],
+                },
+                ActionForm {
+                    kind: ActionKind::GenerateZkWitness,
+                    label: "Generate ZK Witness",
+                    command_label: "write Prover.toml + nargo execute",
+                    description: "Use a saved Foundry wallet to derive its public key, fetch campaign claim inputs, auto-generate the MVP proof secrets locally, write the Noir prover file, and solve the witness for the stealthdrop circuit.",
+                    fields: vec![
+                        FormField {
+                            key: "api_base_url",
+                            label: "API Base URL",
+                            hint: "http://127.0.0.1:3000",
+                            value: "http://127.0.0.1:3000".to_string(),
+                            sensitive: false,
+                            required: true,
+                        },
+                        FormField {
+                            key: "campaign_id",
+                            label: "Campaign ID",
+                            hint: "required: campaign UUID",
+                            value: String::new(),
+                            sensitive: false,
+                            required: true,
+                        },
+                        FormField {
+                            key: "wallet_account",
+                            label: "Wallet Account",
+                            hint: "saved Foundry wallet name, e.g. testing",
+                            value: String::new(),
+                            sensitive: false,
+                            required: true,
+                        },
+                        FormField {
+                            key: "password",
+                            label: "Keystore Password",
+                            hint: "password for the saved wallet",
+                            value: String::new(),
+                            sensitive: true,
+                            required: true,
+                        },
+                        FormField {
+                            key: "keystore_path",
+                            label: "Keystore Path",
+                            hint: "optional: explicit keystore file path",
+                            value: String::new(),
+                            sensitive: false,
+                            required: false,
+                        },
+                        FormField {
+                            key: "circuit_dir",
+                            label: "Circuit Dir",
+                            hint: "../zus_addy",
+                            value: default_circuit_dir(),
+                            sensitive: false,
+                            required: true,
+                        },
+                        FormField {
+                            key: "witness_name",
+                            label: "Witness Name",
+                            hint: "claim_witness",
+                            value: "claim_witness".to_string(),
                             sensitive: false,
                             required: false,
                         },
@@ -275,7 +340,7 @@ impl App {
             selected_field: 0,
             focus: Focus::Actions,
             output:
-                "Campaign Explorer can check claimability with a wallet address or one of your saved Foundry accounts. Use Saved Key Pairs to list account names first."
+                "Campaign Explorer checks claimability. Generate ZK Witness resolves a saved wallet, fetches campaign claim inputs, writes Prover.toml, and runs the Noir witness solver."
                     .to_string(),
             last_command: "GET http://127.0.0.1:3000/campaigns".to_string(),
             status: "Ready".to_string(),
@@ -375,6 +440,26 @@ impl App {
             self.focus = Focus::Fields;
         }
     }
+}
+
+fn default_circuit_dir() -> String {
+    let current_dir = env::current_dir().ok();
+    let fallback = "../zus_addy".to_string();
+
+    let Some(current_dir) = current_dir else {
+        return fallback;
+    };
+
+    let candidate = if current_dir.file_name().and_then(|name| name.to_str()) == Some("tui") {
+        current_dir.parent().map(|parent| parent.join("zus_addy"))
+    } else {
+        Some(current_dir.join("zus_addy"))
+    };
+
+    candidate
+        .unwrap_or_else(|| PathBuf::from(fallback.clone()))
+        .display()
+        .to_string()
 }
 
 impl ActionForm {
