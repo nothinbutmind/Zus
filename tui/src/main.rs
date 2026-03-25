@@ -11,8 +11,8 @@ use std::{
 
 use crate::error::{AppError, AppResult};
 use crate::types::{
-    ActionForm, ActionKind, ApiCampaignSummary, ApiClaimPayload, App, AppTerminal, CommandResult,
-    Focus,
+    ActionForm, ActionKind, ApiCampaignSummary, ApiClaimPayload, ApiFilecoinCampaignResponse, App,
+    AppTerminal, CommandResult, Focus,
 };
 use crossterm::{
     event::{self, Event, KeyCode, KeyEventKind},
@@ -55,8 +55,7 @@ const HELP_TEXT: &str =
 // values before treating the flow as production-ready.
 const MVP_NOIR_MESSAGE: [u8; 8] = *b"ZUSMVP01";
 const MVP_NOIR_STEALTH_TWEAK: [u8; 32] = [
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 7,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7,
 ];
 
 struct CampaignLookupResult {
@@ -145,6 +144,8 @@ impl App {
 fn execute_action(form: &ActionForm) -> AppResult<CommandResult> {
     match form.kind {
         ActionKind::CampaignExplorer => run_campaign_lookup(form),
+        ActionKind::FilecoinTxExplorer => run_filecoin_tx_lookup(form),
+        ActionKind::FilecoinTxClaimLookup => run_filecoin_tx_claim_lookup(form),
         ActionKind::GenerateZkWitness => run_generate_zk_witness(form),
         _ => {
             let args = build_command(form)?;
@@ -514,6 +515,12 @@ fn build_command(form: &ActionForm) -> AppResult<Vec<String>> {
         ActionKind::CampaignExplorer => Err(AppError::message(
             "Campaign Explorer is handled through the proof API, not cast.",
         )),
+        ActionKind::FilecoinTxExplorer => Err(AppError::message(
+            "Filecoin Tx Explorer is handled through the proof API, not cast.",
+        )),
+        ActionKind::FilecoinTxClaimLookup => Err(AppError::message(
+            "Filecoin Tx Claim Lookup is handled through the proof API, not cast.",
+        )),
         ActionKind::GenerateZkWitness => Err(AppError::message(
             "Generate ZK Witness is handled through the Noir circuit flow, not cast.",
         )),
@@ -562,6 +569,7 @@ fn build_command(form: &ActionForm) -> AppResult<Vec<String>> {
                 } else {
                     keystore_dir
                 };
+                ensure_directory_exists(&target_dir)?;
                 args.push(target_dir);
                 if !account_name.is_empty() {
                     args.push(account_name.to_string());
@@ -580,6 +588,7 @@ fn build_command(form: &ActionForm) -> AppResult<Vec<String>> {
 
             let mut args = vec!["wallet".to_string(), "import".to_string()];
             if !keystore_dir.is_empty() {
+                ensure_directory_exists(&keystore_dir)?;
                 args.push("--keystore-dir".to_string());
                 args.push(keystore_dir);
             }
@@ -600,6 +609,20 @@ fn fallback_command_preview(form: &ActionForm) -> String {
                 .unwrap_or_else(|_| "http://127.0.0.1:3000".to_string());
             format!("GET {api_base}/campaigns")
         }
+        ActionKind::FilecoinTxExplorer => {
+            let api_base = normalize_api_base_url(form.value("api_base_url"))
+                .unwrap_or_else(|_| "http://127.0.0.1:3000".to_string());
+            format!("GET {api_base}/filecoin/tx/{}", form.value("tx_hash"))
+        }
+        ActionKind::FilecoinTxClaimLookup => {
+            let api_base = normalize_api_base_url(form.value("api_base_url"))
+                .unwrap_or_else(|_| "http://127.0.0.1:3000".to_string());
+            format!(
+                "GET {api_base}/filecoin/tx/{}/claim/{}",
+                form.value("tx_hash"),
+                form.value("leaf_address")
+            )
+        }
         _ => form.command_label.to_string(),
     }
 }
@@ -616,6 +639,10 @@ fn focus_fields_for_error(app: &mut App, message: &str) {
         Some("api_base_url")
     } else if lowered.contains("campaign id") {
         Some("campaign_id")
+    } else if lowered.contains("tx hash") || lowered.contains("transaction hash") {
+        Some("tx_hash")
+    } else if lowered.contains("leaf address") {
+        Some("leaf_address")
     } else if lowered.contains("wallet address") {
         Some("wallet_address")
     } else if lowered.contains("wallet account") {
@@ -713,6 +740,61 @@ fn run_campaign_lookup(form: &ActionForm) -> AppResult<CommandResult> {
             success: true,
         })
     }
+}
+
+fn run_filecoin_tx_lookup(form: &ActionForm) -> AppResult<CommandResult> {
+    let api_base = normalize_api_base_url(&required_value(
+        form,
+        "api_base_url",
+        "API base URL is required.",
+    )?)?;
+    let tx_hash = required_value(form, "tx_hash", "Tx hash is required.")?;
+    let url = format!("{api_base}/filecoin/tx/{tx_hash}");
+    let client = Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|source| AppError::http("failed to build the proof API client", source))?;
+    let response = client
+        .get(&url)
+        .send()
+        .map_err(|source| AppError::http(format!("failed to fetch {url}"), source))?;
+    let campaign = parse_json_response::<ApiFilecoinCampaignResponse>(response, &url)?;
+
+    Ok(CommandResult {
+        command_preview: format!("GET {url}"),
+        output: format_filecoin_campaign_output(&campaign),
+        success: true,
+    })
+}
+
+fn run_filecoin_tx_claim_lookup(form: &ActionForm) -> AppResult<CommandResult> {
+    let api_base = normalize_api_base_url(&required_value(
+        form,
+        "api_base_url",
+        "API base URL is required.",
+    )?)?;
+    let tx_hash = required_value(form, "tx_hash", "Tx hash is required.")?;
+    let leaf_address = normalize_wallet_address(&required_value(
+        form,
+        "leaf_address",
+        "Leaf address is required.",
+    )?)?;
+    let url = format!("{api_base}/filecoin/tx/{tx_hash}/claim/{leaf_address}");
+    let client = Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|source| AppError::http("failed to build the proof API client", source))?;
+    let response = client
+        .get(&url)
+        .send()
+        .map_err(|source| AppError::http(format!("failed to fetch {url}"), source))?;
+    let claim = parse_json_response::<ApiClaimPayload>(response, &url)?;
+
+    Ok(CommandResult {
+        command_preview: format!("GET {url}"),
+        output: format_single_claim_output(&tx_hash, &claim),
+        success: true,
+    })
 }
 
 fn run_generate_zk_witness(form: &ActionForm) -> AppResult<CommandResult> {
@@ -890,7 +972,10 @@ fn build_prover_toml_contents(
         "stealth_tweak",
         &secrets.stealth_tweak,
     ));
-    prover.push_str(&format_u8_array_toml("wallet_secret", &wallet.wallet_secret));
+    prover.push_str(&format_u8_array_toml(
+        "wallet_secret",
+        &wallet.wallet_secret,
+    ));
     Ok(prover)
 }
 
@@ -1303,6 +1388,86 @@ fn format_campaign_catalog_output(api_base: &str, campaigns: &[ApiCampaignSummar
     output
 }
 
+fn format_filecoin_campaign_output(campaign: &ApiFilecoinCampaignResponse) -> String {
+    let mut output = String::new();
+    let _ = writeln!(output, "tx_hash: {}", campaign.tx_hash);
+    let _ = writeln!(output, "filecoin_url: {}", campaign.filecoin_url);
+    let _ = writeln!(output, "payload_version: {}", campaign.payload.version);
+    let _ = writeln!(output);
+    let _ = writeln!(output, "campaign_id: {}", campaign.campaign.campaign_id);
+    let _ = writeln!(output, "name: {}", campaign.campaign.name);
+    let _ = writeln!(
+        output,
+        "campaign_creator_address: {}",
+        campaign.campaign.campaign_creator_address
+    );
+    let _ = writeln!(output, "merkle_root: {}", campaign.campaign.merkle_root);
+    let _ = writeln!(output, "leaf_count: {}", campaign.campaign.leaf_count);
+    let _ = writeln!(output, "depth: {}", campaign.campaign.depth);
+    let _ = writeln!(
+        output,
+        "hash_algorithm: {}",
+        campaign.campaign.hash_algorithm
+    );
+    let _ = writeln!(output, "leaf_encoding: {}", campaign.campaign.leaf_encoding);
+    let _ = writeln!(output);
+    let _ = writeln!(
+        output,
+        "published_recipients: {}",
+        campaign.payload.recipients.len()
+    );
+    for (index, recipient) in campaign.payload.recipients.iter().enumerate() {
+        let _ = writeln!(
+            output,
+            "  [{}] {} => {}",
+            index, recipient.leaf_address, recipient.amount
+        );
+    }
+    let _ = writeln!(output);
+    let _ = writeln!(output, "reconstructed_claims: {}", campaign.claims.len());
+    for (index, claim) in campaign.claims.iter().enumerate() {
+        let _ = writeln!(
+            output,
+            "  [{}] {} amount={} leaf_value={} proof_len={}",
+            index,
+            claim.leaf_address,
+            claim.amount,
+            claim.leaf_value,
+            claim.proof.len()
+        );
+    }
+    output
+}
+
+fn format_single_claim_output(tx_hash: &str, claim: &ApiClaimPayload) -> String {
+    let mut output = String::new();
+    let _ = writeln!(output, "tx_hash: {tx_hash}");
+    let _ = writeln!(output, "campaign_id: {}", claim.campaign_id);
+    let _ = writeln!(output, "name: {}", claim.name);
+    let _ = writeln!(
+        output,
+        "campaign_creator_address: {}",
+        claim.campaign_creator_address
+    );
+    let _ = writeln!(output, "leaf_address: {}", claim.leaf_address);
+    let _ = writeln!(output, "amount: {}", claim.amount);
+    let _ = writeln!(output, "leaf_index: {}", claim.index);
+    let _ = writeln!(output, "leaf_value: {}", claim.leaf_value);
+    let _ = writeln!(output, "merkle_root: {}", claim.merkle_root);
+    let _ = writeln!(output, "proof_path_len: {}", claim.proof.len());
+    let _ = writeln!(
+        output,
+        "eligible_index: {}",
+        claim.noir_inputs.eligible_index
+    );
+    let _ = writeln!(output, "tree_depth: {}", claim.noir_inputs.tree_depth);
+    let _ = writeln!(output, "eligible_path:");
+    for (path_index, item) in claim.noir_inputs.eligible_path.iter().enumerate() {
+        let _ = writeln!(output, "  [{path_index}] {item}");
+    }
+    output
+}
+
 fn format_campaign_lookup_output(
     api_base: &str,
     wallet_address: &str,
@@ -1467,4 +1632,13 @@ fn default_foundry_keystore_dir() -> String {
     env::var("HOME")
         .map(|home| format!("{home}/.foundry/keystores"))
         .unwrap_or_else(|_| "~/.foundry/keystores".to_string())
+}
+
+fn ensure_directory_exists(path: &str) -> AppResult<()> {
+    fs::create_dir_all(path).map_err(|source| {
+        AppError::io(
+            format!("failed to create keystore directory at {path}"),
+            source,
+        )
+    })
 }

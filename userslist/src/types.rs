@@ -24,6 +24,27 @@ pub struct ClaimLookupRequest {
     pub leaf_address: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PublishedCampaignPayload {
+    pub version: u8,
+    pub campaign: PublishedCampaign,
+    pub recipients: Vec<PublishedRecipient>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PublishedCampaign {
+    pub campaign_id: String,
+    pub name: String,
+    pub campaign_creator_address: String,
+    pub merkle_root: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PublishedRecipient {
+    pub leaf_address: String,
+    pub amount: String,
+}
+
 #[derive(Debug, Serialize, Clone)]
 pub struct CampaignSummary {
     pub campaign_id: String,
@@ -34,6 +55,12 @@ pub struct CampaignSummary {
     pub depth: usize,
     pub hash_algorithm: String,
     pub leaf_encoding: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filecoin_cid: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filecoin_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filecoin_tx_hash: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -64,7 +91,22 @@ pub struct ClaimPayloadResponse {
     pub merkle_root: String,
     pub hash_algorithm: String,
     pub leaf_encoding: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filecoin_cid: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filecoin_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filecoin_tx_hash: Option<String>,
     pub noir_inputs: NoirClaimInputs,
+}
+
+#[derive(Debug, Serialize)]
+pub struct FilecoinCampaignResponse {
+    pub tx_hash: String,
+    pub filecoin_url: String,
+    pub payload: PublishedCampaignPayload,
+    pub campaign: CampaignSummary,
+    pub claims: Vec<PreparedClaim>,
 }
 
 #[derive(Debug, Clone)]
@@ -74,7 +116,7 @@ pub struct PreparedCampaign {
     pub claims: Vec<PreparedClaim>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Serialize, Clone)]
 pub struct PreparedClaim {
     pub leaf_address: String,
     pub amount: String,

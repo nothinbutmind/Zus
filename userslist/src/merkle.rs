@@ -1,8 +1,10 @@
 use crate::{
     error::AppError,
+    filecoin::FilecoinClient,
     types::{
         CampaignSummary, ClaimLookupRequest, ClaimPayloadResponse, CreateCampaignRequest,
-        CreatorCampaignsResponse, HealthResponse, NoirClaimInputs, PreparedCampaign, PreparedClaim,
+        CreatorCampaignsResponse, FilecoinCampaignResponse, HealthResponse, NoirClaimInputs,
+        PreparedCampaign, PreparedClaim, PublishedCampaignPayload, PublishedRecipient,
         RecipientInput,
     },
 };
@@ -23,7 +25,8 @@ const HASH_ALGORITHM: &str = "poseidon2_bn254";
 const LEAF_ENCODING: &str = "field(uint160(address))";
 
 pub struct AppState {
-    pub pool: PgPool,
+    pub pool: Option<PgPool>,
+    pub filecoin: Option<FilecoinClient>,
 }
 
 pub type SharedState = Arc<AppState>;
@@ -44,6 +47,8 @@ struct CampaignSummaryRow {
     depth: i32,
     hash_algorithm: String,
     leaf_encoding: String,
+    filecoin_cid: Option<String>,
+    filecoin_url: Option<String>,
 }
 
 #[derive(Debug, FromRow)]
@@ -59,6 +64,8 @@ struct ClaimPayloadRow {
     merkle_root: String,
     hash_algorithm: String,
     leaf_encoding: String,
+    filecoin_cid: Option<String>,
+    filecoin_url: Option<String>,
 }
 
 #[derive(Debug)]
@@ -76,15 +83,71 @@ pub async fn create_campaign(
     State(state): State<SharedState>,
     Json(payload): Json<CreateCampaignRequest>,
 ) -> Result<Json<CampaignSummary>, AppError> {
-    let prepared = prepare_campaign(payload)?;
-    insert_campaign(&state.pool, &prepared).await?;
+    let mut prepared = prepare_campaign(payload)?;
+    let filecoin = state.filecoin.as_ref().ok_or_else(|| {
+        AppError::bad_request(
+            "PRIVATE_KEY must be set to create campaigns directly on Filecoin testnet",
+        )
+    })?;
+    let upload = filecoin
+        .upload_campaign(&prepared.summary, &prepared.claims)
+        .await?;
+    prepared.summary.filecoin_cid = None;
+    prepared.summary.filecoin_url = Some(upload.url);
+    prepared.summary.filecoin_tx_hash = Some(upload.tx_hash);
+
+    if let Some(pool) = &state.pool {
+        insert_campaign(pool, &prepared).await?;
+    }
 
     Ok(Json(prepared.summary))
+}
+
+pub async fn get_filecoin_campaign(
+    State(state): State<SharedState>,
+    Path(tx_hash): Path<String>,
+) -> Result<Json<FilecoinCampaignResponse>, AppError> {
+    let filecoin = state.filecoin.as_ref().ok_or_else(|| {
+        AppError::bad_request(
+            "FILECOIN_RPC_URL must be set to fetch campaigns from Filecoin transactions",
+        )
+    })?;
+    let payload = filecoin.fetch_published_campaign(&tx_hash).await?;
+    let (campaign, claims) = reconstruct_campaign_from_published(&payload, &tx_hash)?;
+
+    Ok(Json(FilecoinCampaignResponse {
+        tx_hash: tx_hash.clone(),
+        filecoin_url: format!("https://calibration.filfox.info/en/message/{}", tx_hash),
+        payload,
+        campaign,
+        claims,
+    }))
+}
+
+pub async fn get_filecoin_claim_payload_by_path(
+    State(state): State<SharedState>,
+    Path((tx_hash, leaf_address)): Path<(String, String)>,
+) -> Result<Json<ClaimPayloadResponse>, AppError> {
+    let filecoin = state.filecoin.as_ref().ok_or_else(|| {
+        AppError::bad_request(
+            "FILECOIN_RPC_URL must be set to fetch claims from Filecoin transactions",
+        )
+    })?;
+    let payload = filecoin.fetch_published_campaign(&tx_hash).await?;
+    let leaf_address = normalize_address(&leaf_address)?;
+    let (campaign, claims) = reconstruct_campaign_from_published(&payload, &tx_hash)?;
+
+    claim_payload_from_components(&campaign, &claims, &leaf_address).map(Json)
 }
 
 pub async fn list_campaigns(
     State(state): State<SharedState>,
 ) -> Result<Json<Vec<CampaignSummary>>, AppError> {
+    let pool = state.pool.as_ref().ok_or_else(|| {
+        AppError::bad_request(
+            "listing campaigns is unavailable in Filecoin-only mode because there is no database index",
+        )
+    })?;
     let rows = sqlx::query_as::<_, CampaignSummaryRow>(
         r#"
         SELECT
@@ -95,12 +158,14 @@ pub async fn list_campaigns(
             leaf_count,
             depth,
             hash_algorithm,
-            leaf_encoding
+            leaf_encoding,
+            filecoin_cid,
+            filecoin_url
         FROM campaigns
         ORDER BY created_at DESC, name ASC
         "#,
     )
-    .fetch_all(&state.pool)
+    .fetch_all(pool)
     .await?;
 
     let campaigns = rows
@@ -115,6 +180,11 @@ pub async fn get_campaign(
     State(state): State<SharedState>,
     Path(campaign_id): Path<String>,
 ) -> Result<Json<CampaignSummary>, AppError> {
+    let pool = state.pool.as_ref().ok_or_else(|| {
+        AppError::bad_request(
+            "fetching campaigns by id is unavailable in Filecoin-only mode because there is no database index",
+        )
+    })?;
     let campaign_id = parse_campaign_id(&campaign_id)?;
     let row = sqlx::query_as::<_, CampaignSummaryRow>(
         r#"
@@ -126,13 +196,15 @@ pub async fn get_campaign(
             leaf_count,
             depth,
             hash_algorithm,
-            leaf_encoding
+            leaf_encoding,
+            filecoin_cid,
+            filecoin_url
         FROM campaigns
         WHERE id = $1
         "#,
     )
     .bind(campaign_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(pool)
     .await?
     .ok_or_else(|| AppError::not_found(format!("campaign not found: {}", campaign_id)))?;
 
@@ -143,9 +215,14 @@ pub async fn get_claim_payload_by_path(
     State(state): State<SharedState>,
     Path((campaign_id, leaf_address)): Path<(String, String)>,
 ) -> Result<Json<ClaimPayloadResponse>, AppError> {
+    let pool = state.pool.as_ref().ok_or_else(|| {
+        AppError::bad_request(
+            "claim lookups are unavailable in Filecoin-only mode because there is no database index",
+        )
+    })?;
     let campaign_id = parse_campaign_id(&campaign_id)?;
     let leaf_address = normalize_address(&leaf_address)?;
-    let response = fetch_claim_payload(&state.pool, campaign_id, &leaf_address).await?;
+    let response = fetch_claim_payload(pool, campaign_id, &leaf_address).await?;
 
     Ok(Json(response))
 }
@@ -155,9 +232,14 @@ pub async fn get_claim_payload_by_body(
     Path(campaign_id): Path<String>,
     Json(payload): Json<ClaimLookupRequest>,
 ) -> Result<Json<ClaimPayloadResponse>, AppError> {
+    let pool = state.pool.as_ref().ok_or_else(|| {
+        AppError::bad_request(
+            "claim lookups are unavailable in Filecoin-only mode because there is no database index",
+        )
+    })?;
     let campaign_id = parse_campaign_id(&campaign_id)?;
     let leaf_address = normalize_address(&payload.leaf_address)?;
-    let response = fetch_claim_payload(&state.pool, campaign_id, &leaf_address).await?;
+    let response = fetch_claim_payload(pool, campaign_id, &leaf_address).await?;
 
     Ok(Json(response))
 }
@@ -166,6 +248,11 @@ pub async fn list_creator_campaigns(
     State(state): State<SharedState>,
     Path(campaign_creator_address): Path<String>,
 ) -> Result<Json<CreatorCampaignsResponse>, AppError> {
+    let pool = state.pool.as_ref().ok_or_else(|| {
+        AppError::bad_request(
+            "listing creator campaigns is unavailable in Filecoin-only mode because there is no database index",
+        )
+    })?;
     let campaign_creator_address = normalize_address(&campaign_creator_address)?;
     let rows = sqlx::query_as::<_, CampaignSummaryRow>(
         r#"
@@ -177,14 +264,16 @@ pub async fn list_creator_campaigns(
             leaf_count,
             depth,
             hash_algorithm,
-            leaf_encoding
+            leaf_encoding,
+            filecoin_cid,
+            filecoin_url
         FROM campaigns
         WHERE campaign_creator_address = $1
         ORDER BY created_at DESC, name ASC
         "#,
     )
     .bind(&campaign_creator_address)
-    .fetch_all(&state.pool)
+    .fetch_all(pool)
     .await?;
 
     let campaigns = rows
@@ -211,9 +300,11 @@ async fn insert_campaign(pool: &PgPool, prepared: &PreparedCampaign) -> Result<(
             leaf_count,
             depth,
             hash_algorithm,
-            leaf_encoding
+            leaf_encoding,
+            filecoin_cid,
+            filecoin_url
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
         "#,
     )
     .bind(prepared.campaign_id)
@@ -228,6 +319,8 @@ async fn insert_campaign(pool: &PgPool, prepared: &PreparedCampaign) -> Result<(
     })?)
     .bind(&prepared.summary.hash_algorithm)
     .bind(&prepared.summary.leaf_encoding)
+    .bind(&prepared.summary.filecoin_cid)
+    .bind(&prepared.summary.filecoin_url)
     .execute(&mut *transaction)
     .await?;
 
@@ -277,7 +370,9 @@ async fn fetch_claim_payload(
             cc.proof,
             c.merkle_root,
             c.hash_algorithm,
-            c.leaf_encoding
+            c.leaf_encoding,
+            c.filecoin_cid,
+            c.filecoin_url
         FROM campaign_claims cc
         INNER JOIN campaigns c ON c.id = cc.campaign_id
         WHERE c.id = $1 AND cc.leaf_address = $2
@@ -295,6 +390,97 @@ async fn fetch_claim_payload(
     })?;
 
     claim_payload_from_row(row)
+}
+
+fn reconstruct_campaign_from_published(
+    payload: &PublishedCampaignPayload,
+    tx_hash: &str,
+) -> Result<(CampaignSummary, Vec<PreparedClaim>), AppError> {
+    let campaign_creator_address = normalize_address(&payload.campaign.campaign_creator_address)?;
+    let recipients = normalize_published_recipients(&payload.recipients)?;
+    if recipients.is_empty() {
+        return Err(AppError::bad_request(format!(
+            "Filecoin transaction {tx_hash} does not include any recipients"
+        )));
+    }
+    if recipients.len() > MAX_RECIPIENTS {
+        return Err(AppError::bad_request(format!(
+            "Filecoin transaction {tx_hash} includes too many recipients: {}",
+            recipients.len()
+        )));
+    }
+
+    let leaves = recipients
+        .iter()
+        .map(|recipient| address_to_field(&recipient.leaf_address))
+        .collect::<Result<Vec<_>, _>>()?;
+    let merkle = build_noir_merkle_artifacts(&leaves)?;
+
+    if merkle.root != payload.campaign.merkle_root {
+        return Err(AppError::internal(format!(
+            "Filecoin transaction {tx_hash} payload root does not match the reconstructed root"
+        )));
+    }
+
+    let claims = recipients
+        .into_iter()
+        .enumerate()
+        .map(|(index, recipient)| {
+            Ok(PreparedClaim {
+                leaf_address: recipient.leaf_address,
+                amount: recipient.amount,
+                index: i32::try_from(index)
+                    .map_err(|_| AppError::bad_request("too many recipients for i32 leaf index"))?,
+                leaf_value: merkle.leaf_values[index].clone(),
+                proof: merkle.proofs[index].clone(),
+            })
+        })
+        .collect::<Result<Vec<_>, AppError>>()?;
+
+    Ok((
+        CampaignSummary {
+            campaign_id: payload.campaign.campaign_id.clone(),
+            name: payload.campaign.name.clone(),
+            campaign_creator_address,
+            merkle_root: payload.campaign.merkle_root.clone(),
+            leaf_count: claims.len(),
+            depth: TREE_DEPTH,
+            hash_algorithm: HASH_ALGORITHM.to_string(),
+            leaf_encoding: LEAF_ENCODING.to_string(),
+            filecoin_cid: None,
+            filecoin_url: Some(format!(
+                "https://calibration.filfox.info/en/message/{tx_hash}"
+            )),
+            filecoin_tx_hash: Some(tx_hash.to_string()),
+        },
+        claims,
+    ))
+}
+
+fn normalize_published_recipients(
+    recipients: &[PublishedRecipient],
+) -> Result<Vec<NormalizedRecipient>, AppError> {
+    let mut seen = HashSet::with_capacity(recipients.len());
+    let mut normalized = Vec::with_capacity(recipients.len());
+
+    for recipient in recipients {
+        let leaf_address = normalize_address(&recipient.leaf_address)?;
+        let amount = normalize_amount(&recipient.amount)?;
+
+        if !seen.insert(leaf_address.clone()) {
+            return Err(AppError::bad_request(format!(
+                "duplicate leaf address found: {}",
+                leaf_address
+            )));
+        }
+
+        normalized.push(NormalizedRecipient {
+            leaf_address,
+            amount,
+        });
+    }
+
+    Ok(normalized)
 }
 
 fn prepare_campaign(payload: CreateCampaignRequest) -> Result<PreparedCampaign, AppError> {
@@ -354,6 +540,9 @@ fn prepare_campaign(payload: CreateCampaignRequest) -> Result<PreparedCampaign, 
             depth,
             hash_algorithm: HASH_ALGORITHM.to_string(),
             leaf_encoding: LEAF_ENCODING.to_string(),
+            filecoin_cid: None,
+            filecoin_url: None,
+            filecoin_tx_hash: None,
         },
         claims,
     })
@@ -371,6 +560,9 @@ fn campaign_summary_from_row(row: CampaignSummaryRow) -> Result<CampaignSummary,
             .map_err(|_| AppError::internal("negative tree depth loaded from database"))?,
         hash_algorithm: row.hash_algorithm,
         leaf_encoding: row.leaf_encoding,
+        filecoin_cid: row.filecoin_cid,
+        filecoin_url: row.filecoin_url,
+        filecoin_tx_hash: None,
     })
 }
 
@@ -393,11 +585,57 @@ fn claim_payload_from_row(row: ClaimPayloadRow) -> Result<ClaimPayloadResponse, 
         merkle_root: merkle_root.clone(),
         hash_algorithm: row.hash_algorithm,
         leaf_encoding: row.leaf_encoding,
+        filecoin_cid: row.filecoin_cid,
+        filecoin_url: row.filecoin_url,
+        filecoin_tx_hash: None,
         noir_inputs: NoirClaimInputs {
             eligible_root: merkle_root,
             eligible_path: proof,
             eligible_index: index.to_string(),
             leaf_value,
+            tree_depth: TREE_DEPTH,
+        },
+    })
+}
+
+fn claim_payload_from_components(
+    campaign: &CampaignSummary,
+    claims: &[PreparedClaim],
+    leaf_address: &str,
+) -> Result<ClaimPayloadResponse, AppError> {
+    let claim = claims
+        .iter()
+        .find(|claim| claim.leaf_address == leaf_address)
+        .ok_or_else(|| {
+            AppError::not_found(format!(
+                "claim payload not found for Filecoin campaign {} and address {}",
+                campaign.campaign_id, leaf_address
+            ))
+        })?;
+    let index = usize::try_from(claim.index).map_err(|_| {
+        AppError::internal("negative leaf index reconstructed from Filecoin payload")
+    })?;
+
+    Ok(ClaimPayloadResponse {
+        campaign_id: campaign.campaign_id.clone(),
+        name: campaign.name.clone(),
+        campaign_creator_address: campaign.campaign_creator_address.clone(),
+        leaf_address: claim.leaf_address.clone(),
+        amount: claim.amount.clone(),
+        index,
+        leaf_value: claim.leaf_value.clone(),
+        proof: claim.proof.clone(),
+        merkle_root: campaign.merkle_root.clone(),
+        hash_algorithm: campaign.hash_algorithm.clone(),
+        leaf_encoding: campaign.leaf_encoding.clone(),
+        filecoin_cid: None,
+        filecoin_url: campaign.filecoin_url.clone(),
+        filecoin_tx_hash: campaign.filecoin_tx_hash.clone(),
+        noir_inputs: NoirClaimInputs {
+            eligible_root: campaign.merkle_root.clone(),
+            eligible_path: claim.proof.clone(),
+            eligible_index: index.to_string(),
+            leaf_value: claim.leaf_value.clone(),
             tree_depth: TREE_DEPTH,
         },
     })

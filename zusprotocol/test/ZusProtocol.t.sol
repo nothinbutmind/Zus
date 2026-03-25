@@ -89,9 +89,7 @@ contract ZusProtocolTest {
 
         require(protocol.nullifierUsed(expectedNullifierHash), "nullifier missing after first claim");
 
-        vm.expectRevert(
-            abi.encodeWithSelector(ZusProtocol.NullifierAlreadyUsed.selector, expectedNullifierHash)
-        );
+        vm.expectRevert(abi.encodeWithSelector(ZusProtocol.NullifierAlreadyUsed.selector, expectedNullifierHash));
         protocol.claim(hex"1234", publicInputs);
     }
 

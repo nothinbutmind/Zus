@@ -13,8 +13,28 @@ pub async fn init_db(pool: &PgPool) -> Result<(), AppError> {
             depth INTEGER NOT NULL,
             hash_algorithm TEXT NOT NULL,
             leaf_encoding TEXT NOT NULL,
+            filecoin_cid TEXT,
+            filecoin_url TEXT,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        r#"
+        ALTER TABLE campaigns
+        ADD COLUMN IF NOT EXISTS filecoin_cid TEXT
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        r#"
+        ALTER TABLE campaigns
+        ADD COLUMN IF NOT EXISTS filecoin_url TEXT
         "#,
     )
     .execute(pool)

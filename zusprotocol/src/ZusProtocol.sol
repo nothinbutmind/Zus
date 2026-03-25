@@ -28,10 +28,7 @@ contract ZusProtocol {
 
     event Funded(address indexed funder, uint256 amount);
     event Claimed(
-        address indexed caller,
-        address indexed stealthRecipient,
-        bytes32 indexed nullifierHash,
-        uint256 payoutAmount
+        address indexed caller, address indexed stealthRecipient, bytes32 indexed nullifierHash, uint256 payoutAmount
     );
     event Sweep(address indexed recipient, uint256 amount);
 
@@ -60,9 +57,7 @@ contract ZusProtocol {
     // MVP note: this deployment is a single drop with one root + one message domain.
     // The current circuit proves allowlist membership and the stealth recipient,
     // but it does not bind a per-leaf amount, so this contract pays a fixed amount per claim.
-    constructor(address verifier_, bytes32 eligibleRoot_, bytes8 expectedMessage_, uint256 payoutAmount_)
-        payable
-    {
+    constructor(address verifier_, bytes32 eligibleRoot_, bytes8 expectedMessage_, uint256 payoutAmount_) payable {
         if (verifier_ == address(0)) revert InvalidVerifier();
         if (payoutAmount_ == 0) revert InvalidPayoutAmount();
 
@@ -81,10 +76,7 @@ contract ZusProtocol {
         emit Funded(msg.sender, msg.value);
     }
 
-    function claim(bytes calldata proof, bytes32[] calldata publicInputs)
-        external
-        returns (address stealthRecipient)
-    {
+    function claim(bytes calldata proof, bytes32[] calldata publicInputs) external returns (address stealthRecipient) {
         DecodedClaim memory decoded = _decodeAndValidate(publicInputs);
 
         if (nullifierUsed[decoded.nullifierHash]) {
@@ -136,11 +128,7 @@ contract ZusProtocol {
         emit Sweep(recipient, amount);
     }
 
-    function _decodeAndValidate(bytes32[] calldata publicInputs)
-        internal
-        view
-        returns (DecodedClaim memory decoded)
-    {
+    function _decodeAndValidate(bytes32[] calldata publicInputs) internal view returns (DecodedClaim memory decoded) {
         if (publicInputs.length != PUBLIC_INPUTS_LENGTH) {
             revert InvalidPublicInputsLength(publicInputs.length);
         }

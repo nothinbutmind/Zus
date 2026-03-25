@@ -12,6 +12,8 @@ pub enum Focus {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ActionKind {
     CampaignExplorer,
+    FilecoinTxExplorer,
+    FilecoinTxClaimLookup,
     GenerateZkWitness,
     ListAccounts,
     CheckAddress,
@@ -64,6 +66,47 @@ pub struct ApiCampaignSummary {
     pub depth: usize,
     pub hash_algorithm: String,
     pub leaf_encoding: String,
+    pub filecoin_url: Option<String>,
+    pub filecoin_tx_hash: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct ApiPreparedClaim {
+    pub leaf_address: String,
+    pub amount: String,
+    pub index: i32,
+    pub leaf_value: String,
+    pub proof: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct ApiPublishedCampaign {
+    pub campaign_id: String,
+    pub name: String,
+    pub campaign_creator_address: String,
+    pub merkle_root: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct ApiPublishedRecipient {
+    pub leaf_address: String,
+    pub amount: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct ApiPublishedCampaignPayload {
+    pub version: u8,
+    pub campaign: ApiPublishedCampaign,
+    pub recipients: Vec<ApiPublishedRecipient>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct ApiFilecoinCampaignResponse {
+    pub tx_hash: String,
+    pub filecoin_url: String,
+    pub payload: ApiPublishedCampaignPayload,
+    pub campaign: ApiCampaignSummary,
+    pub claims: Vec<ApiPreparedClaim>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -134,6 +177,62 @@ impl App {
                             value: String::new(),
                             sensitive: false,
                             required: false,
+                        },
+                    ],
+                },
+                ActionForm {
+                    kind: ActionKind::FilecoinTxExplorer,
+                    label: "Filecoin Tx Explorer",
+                    command_label: "GET /filecoin/tx/{tx_hash}",
+                    description: "Load a campaign directly from a Filecoin transaction hash, decode the posted calldata, and reconstruct all recipients and merkle claims without a database.",
+                    fields: vec![
+                        FormField {
+                            key: "api_base_url",
+                            label: "API Base URL",
+                            hint: "http://127.0.0.1:3000",
+                            value: "http://127.0.0.1:3000".to_string(),
+                            sensitive: false,
+                            required: true,
+                        },
+                        FormField {
+                            key: "tx_hash",
+                            label: "Tx Hash",
+                            hint: "0x... Filecoin transaction hash",
+                            value: String::new(),
+                            sensitive: false,
+                            required: true,
+                        },
+                    ],
+                },
+                ActionForm {
+                    kind: ActionKind::FilecoinTxClaimLookup,
+                    label: "Filecoin Claim",
+                    command_label: "GET /filecoin/tx/{tx_hash}/claim/{leaf_address}",
+                    description: "Resolve a single leaf and Noir claim payload directly from the Filecoin transaction hash that stored the campaign.",
+                    fields: vec![
+                        FormField {
+                            key: "api_base_url",
+                            label: "API Base URL",
+                            hint: "http://127.0.0.1:3000",
+                            value: "http://127.0.0.1:3000".to_string(),
+                            sensitive: false,
+                            required: true,
+                        },
+                        FormField {
+                            key: "tx_hash",
+                            label: "Tx Hash",
+                            hint: "0x... Filecoin transaction hash",
+                            value: String::new(),
+                            sensitive: false,
+                            required: true,
+                        },
+                        FormField {
+                            key: "leaf_address",
+                            label: "Leaf Address",
+                            hint: "0x... recipient address",
+                            value: String::new(),
+                            sensitive: false,
+                            required: true,
                         },
                     ],
                 },
@@ -340,7 +439,7 @@ impl App {
             selected_field: 0,
             focus: Focus::Actions,
             output:
-                "Campaign Explorer checks claimability. Generate ZK Witness resolves a saved wallet, fetches campaign claim inputs, writes Prover.toml, and runs the Noir witness solver."
+                "Campaign Explorer checks claimability. Filecoin Tx Explorer reconstructs posted chain data. Generate ZK Witness resolves a saved wallet, fetches campaign claim inputs, writes Prover.toml, and runs the Noir witness solver."
                     .to_string(),
             last_command: "GET http://127.0.0.1:3000/campaigns".to_string(),
             status: "Ready".to_string(),
