@@ -3,6 +3,9 @@ use std::{env, io::Stdout, path::PathBuf};
 use ratatui::{Terminal, backend::CrosstermBackend};
 use serde::Deserialize;
 
+pub const DEFAULT_API_BASE_URL: &str = "http://127.0.0.1:3000";
+pub const DEFAULT_ZUS_PROTOCOL_ADDRESS: &str = "0x19b2d6A4D21078A215406eeF1F71731AEE84F7b4";
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Focus {
     Actions,
@@ -59,6 +62,8 @@ pub struct CommandResult {
 #[derive(Debug, Deserialize, Clone)]
 pub struct ApiCampaignSummary {
     pub campaign_id: String,
+    #[serde(default)]
+    pub onchain_campaign_id: Option<String>,
     pub name: String,
     pub campaign_creator_address: String,
     pub merkle_root: String,
@@ -121,6 +126,8 @@ pub struct ApiNoirClaimInputs {
 #[derive(Debug, Deserialize, Clone)]
 pub struct ApiClaimPayload {
     pub campaign_id: String,
+    #[serde(default)]
+    pub onchain_campaign_id: Option<String>,
     pub name: String,
     pub campaign_creator_address: String,
     pub leaf_address: String,
@@ -150,7 +157,7 @@ impl App {
                             key: "api_base_url",
                             label: "API Base URL",
                             hint: "http://127.0.0.1:3000",
-                            value: "http://127.0.0.1:3000".to_string(),
+                            value: default_api_base_url(),
                             sensitive: false,
                             required: true,
                         },
@@ -238,22 +245,14 @@ impl App {
                 },
                 ActionForm {
                     kind: ActionKind::GenerateZkWitness,
-                    label: "Generate ZK Witness",
-                    command_label: "write Prover.toml + nargo execute",
-                    description: "Use a saved Foundry wallet to decrypt the real wallet secret locally, fetch campaign claim inputs, apply the TUI's fixed MVP Noir inputs, write the Noir prover file, and solve the witness for the stealthdrop circuit.",
+                    label: "Prove + Claim",
+                    command_label: "API claim + nargo + bb + cast send",
+                    description: "Fill Campaign, Wallet Account, and Keystore Password. The TUI auto-fetches the API claim payload, uses the default Fuji RPC plus ZusProtocol address, generates the proof, and submits the claim.",
                     fields: vec![
                         FormField {
-                            key: "api_base_url",
-                            label: "API Base URL",
-                            hint: "http://127.0.0.1:3000",
-                            value: "http://127.0.0.1:3000".to_string(),
-                            sensitive: false,
-                            required: true,
-                        },
-                        FormField {
-                            key: "campaign_id",
-                            label: "Campaign ID",
-                            hint: "required: campaign UUID",
+                            key: "campaign_selector",
+                            label: "Campaign",
+                            hint: "required: campaign name for this wallet",
                             value: String::new(),
                             sensitive: false,
                             required: true,
@@ -273,30 +272,6 @@ impl App {
                             value: String::new(),
                             sensitive: true,
                             required: true,
-                        },
-                        FormField {
-                            key: "keystore_path",
-                            label: "Keystore Path",
-                            hint: "optional: explicit keystore file path",
-                            value: String::new(),
-                            sensitive: false,
-                            required: false,
-                        },
-                        FormField {
-                            key: "circuit_dir",
-                            label: "Circuit Dir",
-                            hint: "../zus_addy",
-                            value: default_circuit_dir(),
-                            sensitive: false,
-                            required: true,
-                        },
-                        FormField {
-                            key: "witness_name",
-                            label: "Witness Name",
-                            hint: "claim_witness",
-                            value: "claim_witness".to_string(),
-                            sensitive: false,
-                            required: false,
                         },
                     ],
                 },
@@ -441,7 +416,7 @@ impl App {
             output:
                 "Campaign Explorer checks claimability. Filecoin Tx Explorer reconstructs posted chain data. Generate ZK Witness resolves a saved wallet, fetches campaign claim inputs, writes Prover.toml, and runs the Noir witness solver."
                     .to_string(),
-            last_command: "GET http://127.0.0.1:3000/campaigns".to_string(),
+            last_command: format!("GET {}/campaigns", default_api_base_url()),
             status: "Ready".to_string(),
         }
     }
@@ -541,7 +516,7 @@ impl App {
     }
 }
 
-fn default_circuit_dir() -> String {
+pub fn default_circuit_dir() -> String {
     let current_dir = env::current_dir().ok();
     let fallback = "../zus_addy".to_string();
 
@@ -553,6 +528,69 @@ fn default_circuit_dir() -> String {
         current_dir.parent().map(|parent| parent.join("zus_addy"))
     } else {
         Some(current_dir.join("zus_addy"))
+    };
+
+    candidate
+        .unwrap_or_else(|| PathBuf::from(fallback.clone()))
+        .display()
+        .to_string()
+}
+
+pub fn default_api_base_url() -> String {
+    env::var("ZUS_API_BASE_URL").unwrap_or_else(|_| DEFAULT_API_BASE_URL.to_string())
+}
+
+pub fn default_rpc_url() -> String {
+    env::var("ZUS_RPC_URL").unwrap_or_else(|_| "https://avalanche-fuji.drpc.org".to_string())
+}
+
+pub fn default_protocol_address() -> String {
+    env::var("ZUS_PROTOCOL_ADDRESS")
+        .unwrap_or_else(|_| DEFAULT_ZUS_PROTOCOL_ADDRESS.to_string())
+}
+
+pub fn default_bb_crs_path() -> String {
+    env::var("BB_CRS_PATH")
+        .or_else(|_| env::var("HOME").map(|home| format!("{home}/.bb-crs")))
+        .unwrap_or_else(|_| "~/.bb-crs".to_string())
+}
+
+pub fn default_verifier_vk_path() -> String {
+    let current_dir = env::current_dir().ok();
+    let fallback = "../verifier/generated/stealthdrop/vk/vk".to_string();
+
+    let Some(current_dir) = current_dir else {
+        return fallback;
+    };
+
+    let candidate = if current_dir.file_name().and_then(|name| name.to_str()) == Some("tui") {
+        current_dir
+            .parent()
+            .map(|parent| parent.join("verifier/generated/stealthdrop/vk/vk"))
+    } else {
+        Some(current_dir.join("verifier/generated/stealthdrop/vk/vk"))
+    };
+
+    candidate
+        .unwrap_or_else(|| PathBuf::from(fallback.clone()))
+        .display()
+        .to_string()
+}
+
+pub fn default_proof_output_dir() -> String {
+    let current_dir = env::current_dir().ok();
+    let fallback = "../verifier/generated/stealthdrop/proof_tui".to_string();
+
+    let Some(current_dir) = current_dir else {
+        return fallback;
+    };
+
+    let candidate = if current_dir.file_name().and_then(|name| name.to_str()) == Some("tui") {
+        current_dir
+            .parent()
+            .map(|parent| parent.join("verifier/generated/stealthdrop/proof_tui"))
+    } else {
+        Some(current_dir.join("verifier/generated/stealthdrop/proof_tui"))
     };
 
     candidate

@@ -13,11 +13,13 @@ use crate::merkle::{
 use crate::postgres::init_db;
 use axum::{
     Router,
+    http::{Method, header},
     routing::{get, post},
 };
 use dotenvy::dotenv;
 use sqlx::postgres::PgPoolOptions;
 use std::{env, net::SocketAddr, sync::Arc};
+use tower_http::cors::{Any, CorsLayer};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -38,6 +40,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         pool,
         filecoin: FilecoinClient::from_env(),
     });
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+        .allow_headers(Any)
+        .expose_headers([header::CONTENT_TYPE]);
+
     let app = Router::new()
         .route("/health", get(health))
         .route("/campaigns", get(list_campaigns).post(create_campaign))
@@ -59,13 +67,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "/campaign-creators/{campaign_creator_address}/campaigns",
             get(list_creator_campaigns),
         )
+        .layer(cors)
         .with_state(state);
 
     let port = env::var("PORT")
         .ok()
         .and_then(|value| value.parse::<u16>().ok())
         .unwrap_or(3000);
-    let address = SocketAddr::from(([127, 0, 0, 1], port));
+    let address = SocketAddr::from(([0, 0, 0, 0], port));
     let listener = tokio::net::TcpListener::bind(address).await?;
 
     println!("Merkle proof API listening on http://{}", address);

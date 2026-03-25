@@ -31,12 +31,12 @@ contract CampaignRegistryTest {
             "campaign-1",
             CREATOR,
             "123456",
-            "bafy-cid",
             12,
             "poseidon2_bn254",
             "field(uint160(address))",
             recipients,
-            amounts
+            amounts,
+            "{\"campaign\":\"payload\"}"
         );
 
         require(createdKey == expectedKey, "wrong campaign key");
@@ -44,7 +44,6 @@ contract CampaignRegistryTest {
         CampaignRegistry.Campaign memory campaign = registry.getCampaign(expectedKey);
         require(keccak256(bytes(campaign.campaignId)) == keccak256("campaign-1"), "wrong id");
         require(campaign.creator == CREATOR, "wrong creator");
-        require(keccak256(bytes(campaign.filecoinCid)) == keccak256("bafy-cid"), "wrong cid");
         require(campaign.leafCount == 2, "wrong leaf count");
         require(campaign.depth == 12, "wrong depth");
 
@@ -73,12 +72,12 @@ contract CampaignRegistryTest {
             "campaign-1",
             CREATOR,
             "123456",
-            "bafy-cid",
             12,
             "poseidon2_bn254",
             "field(uint160(address))",
             recipients,
-            amounts
+            amounts,
+            "{\"campaign\":\"payload\"}"
         );
     }
 
@@ -96,12 +95,12 @@ contract CampaignRegistryTest {
             "campaign-1",
             CREATOR,
             "123456",
-            "bafy-cid",
             12,
             "poseidon2_bn254",
             "field(uint160(address))",
             recipients,
-            amounts
+            amounts,
+            "{\"campaign\":\"payload\"}"
         );
     }
 

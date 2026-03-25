@@ -14,12 +14,12 @@ contract CampaignRegistry {
     event CampaignCreated(
         bytes32 indexed campaignKey, string campaignId, address indexed creator, uint256 recipientCount
     );
+    event CampaignPayloadPosted(bytes32 indexed campaignKey, string payload);
 
     struct Campaign {
         string campaignId;
         address creator;
         string merkleRoot;
-        string filecoinCid;
         uint256 leafCount;
         uint256 depth;
         string hashAlgorithm;
@@ -42,12 +42,12 @@ contract CampaignRegistry {
         string calldata campaignId,
         address campaignCreatorAddress,
         string calldata merkleRoot,
-        string calldata filecoinCid,
         uint256 depth,
         string calldata hashAlgorithm,
         string calldata leafEncoding,
         address[] calldata recipients,
-        uint256[] calldata amounts
+        uint256[] calldata amounts,
+        string calldata payload
     ) external returns (bytes32 campaignKey) {
         if (campaignCreatorAddress != msg.sender) {
             revert CreatorMismatch(campaignCreatorAddress, msg.sender);
@@ -65,7 +65,6 @@ contract CampaignRegistry {
         campaign.campaignId = campaignId;
         campaign.creator = campaignCreatorAddress;
         campaign.merkleRoot = merkleRoot;
-        campaign.filecoinCid = filecoinCid;
         campaign.leafCount = recipients.length;
         campaign.depth = depth;
         campaign.hashAlgorithm = hashAlgorithm;
@@ -89,6 +88,7 @@ contract CampaignRegistry {
         allCampaignKeys.push(campaignKey);
 
         emit CampaignCreated(campaignKey, campaignId, campaignCreatorAddress, recipients.length);
+        emit CampaignPayloadPosted(campaignKey, payload);
     }
 
     function getCampaign(bytes32 campaignKey) external view returns (Campaign memory) {

@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: MIT
 pragma solidity >=0.8.21;
 
-import "../src/ZusProtocol.sol";
+import {IVerifier, ZusProtocol} from "../src/ZusProtocol.sol";
 
 interface Vm {
-    function deal(address account, uint256 newBalance) external;
     function prank(address sender) external;
+    function deal(address account, uint256 newBalance) external;
     function expectRevert(bytes calldata revertData) external;
 }
 
 address constant HEVM_ADDRESS = address(uint160(uint256(keccak256("hevm cheat code"))));
-Vm constant vm = Vm(HEVM_ADDRESS);
+Vm constant VM = Vm(HEVM_ADDRESS);
 
 contract MockVerifier is IVerifier {
     bool public shouldVerify = true;
@@ -25,6 +25,8 @@ contract MockVerifier is IVerifier {
 }
 
 contract ZusProtocolTest {
+    bytes32 internal constant CAMPAIGN_ID = bytes32(uint256(0xCAFE));
+    address internal constant CONSISTENCY_CREATOR = 0x308056ef9E0e21CD3e15414F59a17e9d4C510638;
     bytes8 internal constant MESSAGE = "ZUSMVP01";
     bytes32 internal constant ROOT = bytes32(uint256(0x1234));
     uint256 internal constant PAYOUT = 0.25 ether;
@@ -34,20 +36,42 @@ contract ZusProtocolTest {
 
     function setUp() public {
         verifier = new MockVerifier();
-        protocol = new ZusProtocol{value: 1 ether}(address(verifier), ROOT, MESSAGE, PAYOUT);
+        protocol = new ZusProtocol();
+        protocol.createCampaign{value: 1 ether}(CAMPAIGN_ID, address(verifier), ROOT, MESSAGE, PAYOUT);
+    }
+
+    function testCreateCampaignStoresConfigAndBalance() public view {
+        (
+            address owner,
+            address campaignVerifier,
+            bytes32 eligibleRoot,
+            bytes8 expectedMessage,
+            uint256 payoutAmount,
+            uint256 campaignBalance,
+            bool exists
+        ) = protocol.campaigns(CAMPAIGN_ID);
+
+        require(owner == address(this), "wrong owner");
+        require(campaignVerifier == address(verifier), "wrong verifier");
+        require(eligibleRoot == ROOT, "wrong root");
+        require(expectedMessage == MESSAGE, "wrong message");
+        require(payoutAmount == PAYOUT, "wrong payout");
+        require(campaignBalance == 1 ether, "wrong balance");
+        require(exists, "campaign missing");
     }
 
     function testPreviewClaimDecodesClaimData() public view {
         bytes32[] memory publicInputs = _buildPublicInputs(address(0xBEEF));
         bytes32 expectedNullifierHash = _expectedNullifierHash();
 
-        ZusProtocol.ClaimPreview memory preview = protocol.previewClaim(publicInputs);
+        ZusProtocol.ClaimPreview memory preview = protocol.previewClaim(CAMPAIGN_ID, publicInputs);
 
         require(preview.eligibleRoot == ROOT, "wrong root");
         require(preview.nullifierHash == expectedNullifierHash, "wrong nullifier");
         require(preview.stealthRecipient == address(0xBEEF), "wrong stealth recipient");
-        require(!preview.alreadyClaimed, "unexpected claimed state");
         require(preview.payoutAmount == PAYOUT, "wrong payout amount");
+        require(preview.campaignBalance == 1 ether, "wrong campaign balance");
+        require(!preview.alreadyClaimed, "unexpected claimed state");
     }
 
     function testDecodeStealthAddressReturnsRecipient() public view {
@@ -57,6 +81,52 @@ contract ZusProtocolTest {
         require(stealthRecipient == address(0xCAFE), "wrong stealth recipient");
     }
 
+    function testFundCampaignIncreasesBalance() public {
+        protocol.fundCampaign{value: 0.5 ether}(CAMPAIGN_ID);
+
+        (,,,,, uint256 campaignBalance,) = protocol.campaigns(CAMPAIGN_ID);
+        require(campaignBalance == 1.5 ether, "campaign not funded");
+    }
+
+    function testCreateThreeRewardCampaignsStoresIndependentConfigs() public {
+        bytes32[3] memory campaignIds = [
+            keccak256("crecimiento_rewards"),
+            keccak256("avalance_rewards"),
+            keccak256("latam_rewards")
+        ];
+        uint256[3] memory payouts = [uint256(0.1 ether), uint256(0.2 ether), uint256(0.3 ether)];
+        uint256[3] memory funding = [uint256(1 ether), uint256(2 ether), uint256(3 ether)];
+
+        VM.deal(CONSISTENCY_CREATOR, 6 ether);
+
+        for (uint256 i = 0; i < campaignIds.length; ++i) {
+            VM.prank(CONSISTENCY_CREATOR);
+            protocol.createCampaign{value: funding[i]}(
+                campaignIds[i], address(verifier), ROOT, MESSAGE, payouts[i]
+            );
+        }
+
+        for (uint256 i = 0; i < campaignIds.length; ++i) {
+            (
+                address owner,
+                address campaignVerifier,
+                bytes32 eligibleRoot,
+                bytes8 expectedMessage,
+                uint256 payoutAmount,
+                uint256 campaignBalance,
+                bool exists
+            ) = protocol.campaigns(campaignIds[i]);
+
+            require(owner == CONSISTENCY_CREATOR, "wrong campaign owner");
+            require(campaignVerifier == address(verifier), "wrong verifier");
+            require(eligibleRoot == ROOT, "wrong root");
+            require(expectedMessage == MESSAGE, "wrong message");
+            require(payoutAmount == payouts[i], "wrong payout");
+            require(campaignBalance == funding[i], "wrong balance");
+            require(exists, "campaign missing");
+        }
+    }
+
     function testClaimPaysStealthAddressAndMarksNullifierUsed() public {
         address claimer = address(0x1111);
         address stealthRecipient = address(0xCAFE);
@@ -64,20 +134,23 @@ contract ZusProtocolTest {
         bytes32 expectedNullifierHash = _expectedNullifierHash();
         uint256 beforeBalance = stealthRecipient.balance;
 
-        vm.prank(claimer);
-        address returnedRecipient = protocol.claim(hex"1234", publicInputs);
+        VM.prank(claimer);
+        address returnedRecipient = protocol.claim(CAMPAIGN_ID, hex"1234", publicInputs);
 
         require(returnedRecipient == stealthRecipient, "wrong return recipient");
         require(stealthRecipient.balance == beforeBalance + PAYOUT, "recipient not paid");
-        require(protocol.nullifierUsed(expectedNullifierHash), "nullifier not marked");
+        require(protocol.nullifierUsed(CAMPAIGN_ID, expectedNullifierHash), "nullifier not marked");
+
+        (,,,,, uint256 campaignBalance,) = protocol.campaigns(CAMPAIGN_ID);
+        require(campaignBalance == 0.75 ether, "campaign balance not decremented");
     }
 
     function testClaimRevertsWhenVerifierRejects() public {
         verifier.setShouldVerify(false);
         bytes32[] memory publicInputs = _buildPublicInputs(address(0xCAFE));
 
-        vm.expectRevert(abi.encodeWithSelector(ZusProtocol.InvalidProof.selector));
-        protocol.claim(hex"1234", publicInputs);
+        VM.expectRevert(abi.encodeWithSelector(ZusProtocol.InvalidProof.selector));
+        protocol.claim(CAMPAIGN_ID, hex"1234", publicInputs);
     }
 
     function testClaimRevertsOnSecondUse() public {
@@ -85,12 +158,16 @@ contract ZusProtocolTest {
         bytes32[] memory publicInputs = _buildPublicInputs(stealthRecipient);
         bytes32 expectedNullifierHash = _expectedNullifierHash();
 
-        protocol.claim(hex"1234", publicInputs);
+        protocol.claim(CAMPAIGN_ID, hex"1234", publicInputs);
 
-        require(protocol.nullifierUsed(expectedNullifierHash), "nullifier missing after first claim");
+        require(protocol.nullifierUsed(CAMPAIGN_ID, expectedNullifierHash), "nullifier missing");
 
-        vm.expectRevert(abi.encodeWithSelector(ZusProtocol.NullifierAlreadyUsed.selector, expectedNullifierHash));
-        protocol.claim(hex"1234", publicInputs);
+        VM.expectRevert(
+            abi.encodeWithSelector(
+                ZusProtocol.NullifierAlreadyUsed.selector, CAMPAIGN_ID, expectedNullifierHash
+            )
+        );
+        protocol.claim(CAMPAIGN_ID, hex"1234", publicInputs);
     }
 
     function _buildPublicInputs(address stealthRecipient) internal pure returns (bytes32[] memory inputs) {

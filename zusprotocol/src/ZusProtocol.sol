@@ -13,31 +13,69 @@ contract ZusProtocol {
     uint256 private constant NULLIFIER_Y_START = 41;
     uint256 private constant STEALTH_ADDRESS_INDEX = 73;
 
-    error NotOwner();
+    error InvalidCampaignId();
+    error CampaignAlreadyExists(bytes32 campaignId);
+    error CampaignNotFound(bytes32 campaignId);
+    error NotCampaignOwner(bytes32 campaignId, address caller);
     error InvalidVerifier();
     error InvalidPayoutAmount();
+    error InvalidFundingAmount();
     error InvalidPublicInputsLength(uint256 actualLength);
     error UnexpectedMessageByte(uint256 index, bytes32 actualWord, uint8 expectedByte);
     error UnexpectedEligibleRoot(bytes32 actualRoot, bytes32 expectedRoot);
     error UnexpectedPublicByte(uint256 index, bytes32 actualWord);
     error InvalidStealthAddress(bytes32 actualWord);
-    error NullifierAlreadyUsed(bytes32 nullifierHash);
+    error NullifierAlreadyUsed(bytes32 campaignId, bytes32 nullifierHash);
     error InvalidProof();
-    error InsufficientBalance(uint256 available, uint256 required);
+    error InsufficientCampaignBalance(bytes32 campaignId, uint256 available, uint256 required);
     error PayoutFailed();
 
-    event Funded(address indexed funder, uint256 amount);
-    event Claimed(
-        address indexed caller, address indexed stealthRecipient, bytes32 indexed nullifierHash, uint256 payoutAmount
+    event CampaignCreated(
+        bytes32 indexed campaignId,
+        address indexed owner,
+        address indexed verifier,
+        bytes32 eligibleRoot,
+        bytes8 expectedMessage,
+        uint256 payoutAmount,
+        uint256 initialBalance
     );
-    event Sweep(address indexed recipient, uint256 amount);
+    event CampaignFunded(
+        bytes32 indexed campaignId,
+        address indexed funder,
+        uint256 amount,
+        uint256 newBalance
+    );
+    event Claimed(
+        bytes32 indexed campaignId,
+        address indexed caller,
+        address indexed stealthRecipient,
+        bytes32 nullifierHash,
+        uint256 payoutAmount
+    );
+    event CampaignWithdrawn(
+        bytes32 indexed campaignId,
+        address indexed recipient,
+        uint256 amount,
+        uint256 remainingBalance
+    );
+
+    struct Campaign {
+        address owner;
+        address verifier;
+        bytes32 eligibleRoot;
+        bytes8 expectedMessage;
+        uint256 payoutAmount;
+        uint256 balance;
+        bool exists;
+    }
 
     struct ClaimPreview {
         bytes32 eligibleRoot;
         bytes32 nullifierHash;
         address stealthRecipient;
-        bool alreadyClaimed;
         uint256 payoutAmount;
+        uint256 campaignBalance;
+        bool alreadyClaimed;
     }
 
     struct DecodedClaim {
@@ -46,67 +84,94 @@ contract ZusProtocol {
         address stealthRecipient;
     }
 
-    IVerifier public immutable verifier;
-    address public immutable owner;
-    bytes32 public immutable eligibleRoot;
-    bytes8 public immutable expectedMessage;
-    uint256 public immutable payoutAmount;
+    // Keep heavy Merkle data in the Rust API; onchain we only need campaign-level config.
+    mapping(bytes32 => Campaign) public campaigns;
+    mapping(bytes32 => mapping(bytes32 => bool)) public nullifierUsed;
 
-    mapping(bytes32 => bool) public nullifierUsed;
+    function createCampaign(
+        bytes32 campaignId,
+        address verifier,
+        bytes32 eligibleRoot,
+        bytes8 expectedMessage,
+        uint256 payoutAmount
+    ) external payable {
+        if (campaignId == bytes32(0)) revert InvalidCampaignId();
+        if (verifier == address(0)) revert InvalidVerifier();
+        if (payoutAmount == 0) revert InvalidPayoutAmount();
+        if (campaigns[campaignId].exists) revert CampaignAlreadyExists(campaignId);
 
-    // MVP note: this deployment is a single drop with one root + one message domain.
-    // The current circuit proves allowlist membership and the stealth recipient,
-    // but it does not bind a per-leaf amount, so this contract pays a fixed amount per claim.
-    constructor(address verifier_, bytes32 eligibleRoot_, bytes8 expectedMessage_, uint256 payoutAmount_) payable {
-        if (verifier_ == address(0)) revert InvalidVerifier();
-        if (payoutAmount_ == 0) revert InvalidPayoutAmount();
+        campaigns[campaignId] = Campaign({
+            owner: msg.sender,
+            verifier: verifier,
+            eligibleRoot: eligibleRoot,
+            expectedMessage: expectedMessage,
+            payoutAmount: payoutAmount,
+            balance: msg.value,
+            exists: true
+        });
 
-        verifier = IVerifier(verifier_);
-        owner = msg.sender;
-        eligibleRoot = eligibleRoot_;
-        expectedMessage = expectedMessage_;
-        payoutAmount = payoutAmount_;
-
-        if (msg.value != 0) {
-            emit Funded(msg.sender, msg.value);
-        }
+        emit CampaignCreated(
+            campaignId,
+            msg.sender,
+            verifier,
+            eligibleRoot,
+            expectedMessage,
+            payoutAmount,
+            msg.value
+        );
     }
 
-    receive() external payable {
-        emit Funded(msg.sender, msg.value);
+    function fundCampaign(bytes32 campaignId) external payable {
+        if (msg.value == 0) revert InvalidFundingAmount();
+
+        Campaign storage campaign = _loadCampaign(campaignId);
+        campaign.balance += msg.value;
+
+        emit CampaignFunded(campaignId, msg.sender, msg.value, campaign.balance);
     }
 
-    function claim(bytes calldata proof, bytes32[] calldata publicInputs) external returns (address stealthRecipient) {
-        DecodedClaim memory decoded = _decodeAndValidate(publicInputs);
+    function claim(bytes32 campaignId, bytes calldata proof, bytes32[] calldata publicInputs)
+        external
+        returns (address stealthRecipient)
+    {
+        Campaign storage campaign = _loadCampaign(campaignId);
+        DecodedClaim memory decoded = _decodeAndValidate(campaign, publicInputs);
 
-        if (nullifierUsed[decoded.nullifierHash]) {
-            revert NullifierAlreadyUsed(decoded.nullifierHash);
+        if (nullifierUsed[campaignId][decoded.nullifierHash]) {
+            revert NullifierAlreadyUsed(campaignId, decoded.nullifierHash);
         }
-        if (address(this).balance < payoutAmount) {
-            revert InsufficientBalance(address(this).balance, payoutAmount);
+        if (campaign.balance < campaign.payoutAmount) {
+            revert InsufficientCampaignBalance(campaignId, campaign.balance, campaign.payoutAmount);
         }
 
-        bool verified = verifier.verify(proof, publicInputs);
+        bool verified = IVerifier(campaign.verifier).verify(proof, publicInputs);
         if (!verified) revert InvalidProof();
 
-        nullifierUsed[decoded.nullifierHash] = true;
+        nullifierUsed[campaignId][decoded.nullifierHash] = true;
+        campaign.balance -= campaign.payoutAmount;
         stealthRecipient = decoded.stealthRecipient;
 
-        (bool sent,) = stealthRecipient.call{value: payoutAmount}("");
+        (bool sent,) = stealthRecipient.call{value: campaign.payoutAmount}("");
         if (!sent) revert PayoutFailed();
 
-        emit Claimed(msg.sender, stealthRecipient, decoded.nullifierHash, payoutAmount);
+        emit Claimed(campaignId, msg.sender, stealthRecipient, decoded.nullifierHash, campaign.payoutAmount);
     }
 
-    function previewClaim(bytes32[] calldata publicInputs) external view returns (ClaimPreview memory preview) {
-        DecodedClaim memory decoded = _decodeAndValidate(publicInputs);
+    function previewClaim(bytes32 campaignId, bytes32[] calldata publicInputs)
+        external
+        view
+        returns (ClaimPreview memory preview)
+    {
+        Campaign storage campaign = _loadCampaign(campaignId);
+        DecodedClaim memory decoded = _decodeAndValidate(campaign, publicInputs);
 
         preview = ClaimPreview({
             eligibleRoot: decoded.eligibleRoot,
             nullifierHash: decoded.nullifierHash,
             stealthRecipient: decoded.stealthRecipient,
-            alreadyClaimed: nullifierUsed[decoded.nullifierHash],
-            payoutAmount: payoutAmount
+            payoutAmount: campaign.payoutAmount,
+            campaignBalance: campaign.balance,
+            alreadyClaimed: nullifierUsed[campaignId][decoded.nullifierHash]
         });
     }
 
@@ -118,26 +183,45 @@ contract ZusProtocol {
         return _decodeStealthAddress(publicInputs[STEALTH_ADDRESS_INDEX]);
     }
 
-    function sweep(address payable recipient, uint256 amount) external {
-        if (msg.sender != owner) revert NotOwner();
-        if (address(this).balance < amount) revert InsufficientBalance(address(this).balance, amount);
+    function withdrawCampaignBalance(bytes32 campaignId, address payable recipient, uint256 amount) external {
+        Campaign storage campaign = _loadCampaign(campaignId);
+
+        if (msg.sender != campaign.owner) {
+            revert NotCampaignOwner(campaignId, msg.sender);
+        }
+        if (campaign.balance < amount) {
+            revert InsufficientCampaignBalance(campaignId, campaign.balance, amount);
+        }
+
+        campaign.balance -= amount;
 
         (bool sent,) = recipient.call{value: amount}("");
         if (!sent) revert PayoutFailed();
 
-        emit Sweep(recipient, amount);
+        emit CampaignWithdrawn(campaignId, recipient, amount, campaign.balance);
     }
 
-    function _decodeAndValidate(bytes32[] calldata publicInputs) internal view returns (DecodedClaim memory decoded) {
+    function _loadCampaign(bytes32 campaignId) internal view returns (Campaign storage campaign) {
+        if (campaignId == bytes32(0)) revert InvalidCampaignId();
+
+        campaign = campaigns[campaignId];
+        if (!campaign.exists) revert CampaignNotFound(campaignId);
+    }
+
+    function _decodeAndValidate(Campaign storage campaign, bytes32[] calldata publicInputs)
+        internal
+        view
+        returns (DecodedClaim memory decoded)
+    {
         if (publicInputs.length != PUBLIC_INPUTS_LENGTH) {
             revert InvalidPublicInputsLength(publicInputs.length);
         }
 
-        _validateMessage(publicInputs);
+        _validateMessage(campaign.expectedMessage, publicInputs);
 
         decoded.eligibleRoot = publicInputs[ELIGIBLE_ROOT_INDEX];
-        if (decoded.eligibleRoot != eligibleRoot) {
-            revert UnexpectedEligibleRoot(decoded.eligibleRoot, eligibleRoot);
+        if (decoded.eligibleRoot != campaign.eligibleRoot) {
+            revert UnexpectedEligibleRoot(decoded.eligibleRoot, campaign.eligibleRoot);
         }
 
         bytes32 nullifierX = _packOutputBytes(publicInputs, NULLIFIER_X_START);
@@ -147,7 +231,7 @@ contract ZusProtocol {
         decoded.stealthRecipient = _decodeStealthAddress(publicInputs[STEALTH_ADDRESS_INDEX]);
     }
 
-    function _validateMessage(bytes32[] calldata publicInputs) internal view {
+    function _validateMessage(bytes8 expectedMessage, bytes32[] calldata publicInputs) internal pure {
         bytes memory messageBytes = abi.encodePacked(expectedMessage);
 
         for (uint256 i = 0; i < MESSAGE_LENGTH; ++i) {
@@ -184,6 +268,7 @@ contract ZusProtocol {
             revert InvalidStealthAddress(publicInputWord);
         }
 
+        // forge-lint: disable-next-line(unsafe-typecast)
         return address(uint160(rawAddress));
     }
 }
